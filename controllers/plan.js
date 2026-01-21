@@ -1,0 +1,317 @@
+const mongoose = require("mongoose");
+const Company = require("../models/company");
+const Plan = require("../models/plan");
+const Subscription = require("../models/subscription");
+
+exports.createPlan = async (req, res) => {
+  try {
+    if (req.user.role.name !== "superAdmin") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const {
+      planName,
+      monthlyFees,
+      annualFees,
+      sequence,
+      planDescription,
+      planFeatures = [],
+    } = req.body;
+
+    if (!planName || monthlyFees == null || annualFees == null || sequence == null) {
+      return res.status(400).json({
+        message: "planName, monthlyFees, sequence and annualFees are required",
+      });
+    }
+
+    const exists = await Plan.findOne({
+      planName: planName.trim(),
+      planStatus: "active",
+      isDeleted: false,
+    });
+
+    if (exists) {
+      return res.status(409).json({
+        message: "Plan already exists with this name",
+      });
+    }
+
+    const plan = await Plan.create({
+      planName: planName.trim(),
+      monthlyFees,
+      annualFees,
+      sequence,
+      planDescription,
+      planFeatures,
+      createdBy: req.user._id,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Plan created successfully",
+      data: plan,
+    });
+  } catch (error) {
+    console.error("Create plan error:", error);
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "Plan already exists with this Sequence",
+      });
+    }
+    return res.status(500).json({
+      message: "Failed to create plan",
+    });
+  }
+};
+
+exports.togglePlanStatus = async (req, res) => {
+  try {
+    if (req.user.role.name !== "superAdmin") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid plan id" });
+    }
+
+    const plan = await Plan.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!plan) {
+      return res.status(404).json({
+        message: "Plan not found",
+      });
+    }
+
+    plan.planStatus = plan.planStatus === "active" ? "inactive" : "active";
+    await plan.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Plan ${plan.planStatus} successfully`,
+      data: {
+        id: plan._id,
+        planStatus: plan.planStatus,
+      },
+    });
+  } catch (error) {
+    console.error("Toggle plan status error:", error);
+    return res.status(500).json({
+      message: "Failed to toggle plan status",
+    });
+  }
+};
+
+
+exports.softDeletePlan = async (req, res) => {
+  try {
+    if (req.user.role.name !== "superAdmin") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid plan id" });
+    }
+
+    const plan = await Plan.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!plan) {
+      return res.status(404).json({
+        message: "Plan not found",
+      });
+    }
+
+    const planInUse = await Company.exists({
+      planId: plan._id,
+      isDeleted: false,
+    });
+
+    if (planInUse) {
+      return res.status(409).json({
+        message: "Plan is currently assigned to companies and cannot be deleted",
+      });
+    }
+
+    plan.isDeleted = true;
+    plan.planStatus = "inactive";
+    await plan.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Plan deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete plan error:", error);
+    return res.status(500).json({
+      message: "Failed to delete plan",
+    });
+  }
+};
+
+
+exports.getAllPlans = async (req, res) => {
+  try {
+    if (req.user.role.name !== "superAdmin") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const search = req.query.search?.trim();
+
+    const skip = (page - 1) * limit;
+
+    const filter = {
+      isDeleted: false,
+    };
+
+    if (search) {
+      filter.planName = { $regex: search, $options: "i" };
+    }
+
+    const [plans, total] = await Promise.all([
+      Plan.find(filter)
+        .sort({ sequence: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+
+      Plan.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+      data: plans,
+    });
+  } catch (error) {
+    console.error("Get all plans error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch plans",
+    });
+  }
+};
+
+
+
+exports.purchasePlan = async (req, res) => {
+  try {
+    const user = req.user;
+
+    if (user.role.name !== "company_admin") {
+      return res.status(403).json({
+        message: "Only company admin can purchase plans",
+      });
+    }
+
+    const { planId, billingCycle } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      return res.status(400).json({ message: "Invalid plan id" });
+    }
+
+    if (!["monthly", "yearly"].includes(billingCycle)) {
+      return res.status(400).json({
+        message: "billingCycle must be monthly or yearly",
+      });
+    }
+
+    const company = await Company.findOne({
+      _id: user.company,
+      isDeleted: false,
+    });
+
+    if (!company) {
+      return res.status(404).json({
+        message: "Company not found",
+      });
+    }
+
+    if (
+      company.subscriptionStatus === "active" &&
+      company.subscriptionEndDate &&
+      company.subscriptionEndDate > new Date()
+    ) {
+      return res.status(409).json({
+        message: "Company already has an active subscription",
+      });
+    }
+
+    const plan = await Plan.findOne({
+      _id: planId,
+      planStatus: "active",
+      isDeleted: false,
+    });
+
+    if (!plan) {
+      return res.status(404).json({
+        message: "Plan not found or inactive",
+      });
+    }
+
+    const amount =
+      billingCycle === "yearly"
+        ? plan.annualFees
+        : plan.monthlyFees;
+
+    const startDate = new Date();
+
+    const endDate =
+      billingCycle === "yearly"
+        ? new Date(new Date(startDate).setFullYear(startDate.getFullYear() + 1))
+        : new Date(new Date(startDate).setMonth(startDate.getMonth() + 1));
+
+
+    const subscription = await Subscription.create({
+      company: company._id,
+      plan: plan._id,
+      billingCycle,
+      amount,
+      startDate,
+      endDate,
+      status: "active",
+      createdBy: user._id,
+    });
+
+    company.planId = plan._id; 
+    company.subscriptionId = subscription._id;
+    company.subscriptionAmount = amount;
+    company.subscriptionStartDate = startDate;
+    company.subscriptionEndDate = endDate;
+    company.subscriptionStatus = "active"; 
+    company.paymentFrequency = billingCycle;
+
+    await company.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Plan purchased successfully (payment mocked)",
+      data: {
+        plan: plan.planName,
+        billingCycle,
+        amount,
+        startDate,
+        endDate,
+        subscriptionId: subscription._id,
+      },
+    });
+  } catch (error) {
+    console.error("Purchase plan error:", error);
+    return res.status(500).json({
+      message: "Failed to purchase plan",
+    });
+  }
+};

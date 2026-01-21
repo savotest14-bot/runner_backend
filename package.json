@@ -1,0 +1,32 @@
+{
+  "name": "runner",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "server": "nodemon server.js",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "google-auth-library": "^10.5.0",
+    "joi": "^18.0.2",
+    "jsonwebtoken": "^9.0.3",
+    "moment": "^2.30.1",
+    "mongoose": "^9.1.1",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.12",
+    "nodemon": "^3.1.11",
+    "simple-node-logger": "^21.8.12",
+    "twilio": "^5.11.1",
+    "uuid": "^8.3.2"
+  }
+}
