@@ -190,7 +190,7 @@ exports.createContract = async (req, res) => {
     // sequences
     const invoiceSeq = await getNextSequence("invoice", session);
     const referenceSeq = await getNextSequence("reference", session);
-
+//comment
     const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2);
     const referenceNumber = formatNumber("INV", referenceSeq, 3);
     const contractNumber = `CON-${new Date()
