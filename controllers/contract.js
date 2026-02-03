@@ -7,8 +7,114 @@ const { getFileUrl } = require("../functions/common");
 const formatNumber = require("../utils/formatNumber");
 const getNextSequence = require("../utils/getNextSequence");
 
-
 /**Super Admin */
+
+// exports.createContract = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     if (req.user.role.name !== "superAdmin") {
+//       return res.status(403).json({ message: "Access denied" });
+//     }
+
+//     const {
+//       contractType,
+//       startDate,
+//       endDate,
+//       company,
+//       client,
+//       property,
+//       tasks = [],
+//     } = req.body;
+//     if (req.files?.clientLogo?.length) {
+//       client.clientLogo = req.files.clientLogo[0].path;
+//     }
+
+//     const additionalDocuments =
+//       req.files?.additionalDocuments?.map((file) => ({
+//         fileName: file.originalname,
+//         fileUrl: file.path,
+//       })) || [];
+
+//     const createdClient = await Client.create([{ ...client, company }], {
+//       session,
+//     });
+//     const createdProperty = await Property.create(
+//       [
+//         {
+//           ...property,
+//           client: createdClient[0]._id,
+//         },
+//       ],
+//       { session },
+//     );
+
+//     const taskDocs = tasks.map((task) => ({
+//       ...task,
+//       company,
+//       assignedBy: req.user._id,
+//     }));
+
+//     const createdTasks = taskDocs.length
+//       ? await Task.create(taskDocs, { session })
+//       : [];
+
+//     const totalTasks = createdTasks.length;
+//     const totalTimeDays = createdTasks.reduce(
+//       (sum, t) => sum + (t.taskTime || 0),
+//       0,
+//     );
+//     const totalCost = createdTasks.reduce(
+//       (sum, t) => sum + (t.taskPrice || 0),
+//       0,
+//     );
+//     const invoiceSeq = await getNextSequence("invoice", session);
+//     const referenceSeq = await getNextSequence("reference", session);
+
+//     const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2);
+//     const referenceNumber = formatNumber("INV", referenceSeq, 3);
+//     const contractNumber = `CON-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+//     const contract = await Contract.create(
+//       [
+//         {
+//           contractNumber,
+//           invoiceNumber,
+//           referenceNumber,
+//           contractType,
+//           startDate,
+//           endDate,
+//           client: createdClient[0]._id,
+//           property: createdProperty[0]._id,
+//           tasks: createdTasks.map((t) => t._id),
+//           totalTasks,
+//           totalTimeDays,
+//           totalCost,
+//           company,
+//           createdBy: req.user._id,
+//           additionalDocuments,
+//         },
+//       ],
+//       { session },
+//     );
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Contract created successfully",
+//       data: contract[0],
+//     });
+//   } catch (err) {
+//     await session.abortTransaction();
+//     session.endSession();
+
+//     console.error(err);
+//     res.status(500).json({ message: "Failed to create contract" });
+//   }
+// };
 
 exports.createContract = async (req, res) => {
   const session = await mongoose.startSession();
@@ -28,20 +134,26 @@ exports.createContract = async (req, res) => {
       property,
       tasks = [],
     } = req.body;
+
+    // client logo
     if (req.files?.clientLogo?.length) {
       client.clientLogo = req.files.clientLogo[0].path;
     }
 
+    // additional documents
     const additionalDocuments =
       req.files?.additionalDocuments?.map((file) => ({
         fileName: file.originalname,
         fileUrl: file.path,
       })) || [];
 
-    const createdClient = await Client.create(
-      [{ ...client, company }],
-      { session }
-    );
+    // ✅ FIX 1: Client
+    const createdClient = await Client.create([{ ...client, company }], {
+      session,
+      ordered: true,
+    });
+
+    // ✅ FIX 2: Property
     const createdProperty = await Property.create(
       [
         {
@@ -49,35 +161,44 @@ exports.createContract = async (req, res) => {
           client: createdClient[0]._id,
         },
       ],
-      { session }
+      { session, ordered: true },
     );
 
+    // tasks
     const taskDocs = tasks.map((task) => ({
       ...task,
       company,
       assignedBy: req.user._id,
     }));
 
+    // ✅ FIX 3: Tasks
     const createdTasks = taskDocs.length
-      ? await Task.create(taskDocs, { session })
+      ? await Task.create(taskDocs, { session, ordered: true })
       : [];
 
+    // totals
     const totalTasks = createdTasks.length;
     const totalTimeDays = createdTasks.reduce(
       (sum, t) => sum + (t.taskTime || 0),
-      0
+      0,
     );
     const totalCost = createdTasks.reduce(
       (sum, t) => sum + (t.taskPrice || 0),
-      0
+      0,
     );
-  const invoiceSeq = await getNextSequence("invoice", session);
+
+    // sequences
+    const invoiceSeq = await getNextSequence("invoice", session);
     const referenceSeq = await getNextSequence("reference", session);
 
-    const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2); 
+    const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2);
     const referenceNumber = formatNumber("INV", referenceSeq, 3);
-    const contractNumber = `CON-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const contractNumber = `CON-${new Date()
+      .toISOString()
+      .slice(0, 10)
+      .replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    // ✅ FIX 4: Contract
     const contract = await Contract.create(
       [
         {
@@ -98,7 +219,7 @@ exports.createContract = async (req, res) => {
           additionalDocuments,
         },
       ],
-      { session }
+      { session, ordered: true },
     );
 
     await session.commitTransaction();
@@ -117,7 +238,6 @@ exports.createContract = async (req, res) => {
     res.status(500).json({ message: "Failed to create contract" });
   }
 };
-
 
 exports.getSingleContractBySuperAdmin = async (req, res) => {
   try {
@@ -161,10 +281,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
     }
 
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(
-        req,
-        contract.client.clientLogo
-      );
+      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
     }
 
     if (contract.additionalDocuments?.length) {
@@ -172,7 +289,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        })
+        }),
       );
     }
 
@@ -187,7 +304,6 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
     });
   }
 };
-
 
 exports.getAllContracts = async (req, res) => {
   try {
@@ -206,7 +322,7 @@ exports.getAllContracts = async (req, res) => {
       if (contract.client?.clientLogo) {
         contract.client.clientLogo = getFileUrl(
           req,
-          contract.client.clientLogo
+          contract.client.clientLogo,
         );
       }
 
@@ -215,7 +331,7 @@ exports.getAllContracts = async (req, res) => {
           (doc) => ({
             ...doc,
             fileUrl: getFileUrl(req, doc.fileUrl),
-          })
+          }),
         );
       }
 
@@ -231,7 +347,6 @@ exports.getAllContracts = async (req, res) => {
     res.status(500).json({ message: "Failed to fetch contracts" });
   }
 };
-
 
 exports.getSingleContractBySuperAdmin = async (req, res) => {
   try {
@@ -275,10 +390,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
     }
 
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(
-        req,
-        contract.client.clientLogo
-      );
+      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
     }
 
     if (contract.additionalDocuments?.length) {
@@ -286,7 +398,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        })
+        }),
       );
     }
 
@@ -304,14 +416,122 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
 
 /**Company Admin */
 
+// exports.createContractByCompanyAdmin = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+//   try {
+//     if (req.user.role.name !== "company_admin") {
+//       return res.status(403).json({ message: "Access denied" });
+//     }
+//     const {
+//       contractType,
+//       startDate,
+//       endDate,
+//       client,
+//       property,
+//       tasks = [],
+//     } = req.body;
+//     const company = req.user.company;
+//     console.log("req.body", req.body);
+//     if (req.files?.clientLogo?.length) {
+//       client.clientLogo = req.files.clientLogo[0].path;
+//     }
+
+//     const additionalDocuments =
+//       req.files?.additionalDocuments?.map((file) => ({
+//         fileName: file.originalname,
+//         fileUrl: file.path,
+//       })) || [];
+
+//     const createdClient = await Client.create([{ ...client, company }], {
+//       session,
+//     });
+
+//     const createdProperty = await Property.create(
+//       [
+//         {
+//           ...property,
+//           client: createdClient[0]._id,
+//         },
+//       ],
+//       { session },
+//     );
+
+//     const taskDocs = tasks.map((task) => ({
+//       ...task,
+//       company,
+//       assignedBy: req.user._id,
+//     }));
+
+//     const createdTasks = taskDocs.length
+//       ? await Task.create(taskDocs, { session })
+//       : [];
+
+//     const totalTasks = createdTasks.length;
+//     const totalTimeDays = createdTasks.reduce(
+//       (sum, t) => sum + (t.taskTime || 0),
+//       0,
+//     );
+//     const totalCost = createdTasks.reduce(
+//       (sum, t) => sum + (t.taskPrice || 0),
+//       0,
+//     );
+//     const invoiceSeq = await getNextSequence("invoice", session);
+//     const referenceSeq = await getNextSequence("reference", session);
+
+//     const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2);
+//     const referenceNumber = formatNumber("INV", referenceSeq, 3);
+//     const contractNumber = `CON-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+//     const contract = await Contract.create(
+//       [
+//         {
+//           contractNumber,
+//           invoiceNumber,
+//           referenceNumber,
+//           contractType,
+//           startDate,
+//           endDate,
+//           client: createdClient[0]._id,
+//           property: createdProperty[0]._id,
+//           tasks: createdTasks.map((t) => t._id),
+//           totalTasks,
+//           totalTimeDays,
+//           totalCost,
+//           company,
+//           createdBy: req.user._id,
+//           additionalDocuments,
+//         },
+//       ],
+//       { session },
+//     );
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Contract created successfully",
+//       data: contract[0],
+//     });
+//   } catch (err) {
+//     await session.abortTransaction();
+//     session.endSession();
+
+//     console.error(err);
+//     res.status(500).json({ message: "Failed to create contract" });
+//   }
+// };
 
 exports.createContractByCompanyAdmin = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
+
   try {
     if (req.user.role.name !== "company_admin") {
       return res.status(403).json({ message: "Access denied" });
     }
+
     const {
       contractType,
       startDate,
@@ -320,8 +540,12 @@ exports.createContractByCompanyAdmin = async (req, res) => {
       property,
       tasks = [],
     } = req.body;
+
     const company = req.user.company;
 
+    console.log("req.body", req.body);
+
+    // ---------------- CLIENT LOGO ----------------
     if (req.files?.clientLogo?.length) {
       client.clientLogo = req.files.clientLogo[0].path;
     }
@@ -332,48 +556,67 @@ exports.createContractByCompanyAdmin = async (req, res) => {
         fileUrl: file.path,
       })) || [];
 
-    const createdClient = await Client.create(
-      [{ ...client, company }],
-      { session }
-    );
+    // ---------------- CREATE CLIENT ----------------
+    const [createdClient] = await Client.create([{ ...client, company }], {
+      session,
+    });
 
-    const createdProperty = await Property.create(
+    // ---------------- CREATE PROPERTY ----------------
+    const [createdProperty] = await Property.create(
       [
         {
           ...property,
-          client: createdClient[0]._id,
+          client: createdClient._id,
         },
       ],
-      { session }
+      { session },
     );
 
-    const taskDocs = tasks.map((task) => ({
-      ...task,
-      company,
-      assignedBy: req.user._id,
-    }));
+    // ---------------- CREATE TASKS (FIXED PART) ----------------
+    const createdTasks = [];
 
-    const createdTasks = taskDocs.length
-      ? await Task.create(taskDocs, { session })
-      : [];
+    for (const task of tasks) {
+      const [createdTask] = await Task.create(
+        [
+          {
+            ...task,
+            company,
+            assignedBy: req.user._id,
+          },
+        ],
+        { session },
+      );
 
+      createdTasks.push(createdTask);
+    }
+
+    // ---------------- CALCULATIONS ----------------
     const totalTasks = createdTasks.length;
+
     const totalTimeDays = createdTasks.reduce(
-      (sum, t) => sum + (t.taskTime || 0),
-      0
+      (sum, t) => sum + (Number(t.taskTime) || 0),
+      0,
     );
+
     const totalCost = createdTasks.reduce(
-      (sum, t) => sum + (t.taskPrice || 0),
-      0
+      (sum, t) => sum + (Number(t.taskPrice) || 0),
+      0,
     );
+
+    // ---------------- NUMBERS ----------------
     const invoiceSeq = await getNextSequence("invoice", session);
     const referenceSeq = await getNextSequence("reference", session);
 
-    const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2); 
+    const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2);
     const referenceNumber = formatNumber("INV", referenceSeq, 3);
-    const contractNumber = `CON-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const contract = await Contract.create(
+    const contractNumber = `CON-${new Date()
+      .toISOString()
+      .slice(0, 10)
+      .replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // ---------------- CREATE CONTRACT ----------------
+    const [contract] = await Contract.create(
       [
         {
           contractNumber,
@@ -382,8 +625,8 @@ exports.createContractByCompanyAdmin = async (req, res) => {
           contractType,
           startDate,
           endDate,
-          client: createdClient[0]._id,
-          property: createdProperty[0]._id,
+          client: createdClient._id,
+          property: createdProperty._id,
           tasks: createdTasks.map((t) => t._id),
           totalTasks,
           totalTimeDays,
@@ -393,26 +636,26 @@ exports.createContractByCompanyAdmin = async (req, res) => {
           additionalDocuments,
         },
       ],
-      { session }
+      { session },
     );
 
+    // ---------------- COMMIT ----------------
     await session.commitTransaction();
     session.endSession();
 
     res.status(201).json({
       success: true,
       message: "Contract created successfully",
-      data: contract[0],
+      data: contract,
     });
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
 
-    console.error(err);
+    console.error("CREATE CONTRACT ERROR:", err);
     res.status(500).json({ message: "Failed to create contract" });
   }
 };
-
 
 exports.getCompanyAdminContracts = async (req, res) => {
   try {
@@ -423,12 +666,7 @@ exports.getCompanyAdminContracts = async (req, res) => {
         message: "Only company admin can access contracts",
       });
     }
-    const {
-      page = 1,
-      limit = 10,
-      search = "",
-      status,
-    } = req.query;
+    const { page = 1, limit = 10, search = "", status } = req.query;
 
     const skip = (page - 1) * limit;
 
@@ -460,7 +698,7 @@ exports.getCompanyAdminContracts = async (req, res) => {
       contracts = contracts.filter(
         (c) =>
           c.contractNumber?.toLowerCase().includes(keyword) ||
-          c.client?.name?.toLowerCase().includes(keyword)
+          c.client?.name?.toLowerCase().includes(keyword),
       );
     }
 
@@ -468,7 +706,7 @@ exports.getCompanyAdminContracts = async (req, res) => {
       if (contract.client?.clientLogo) {
         contract.client.clientLogo = getFileUrl(
           req,
-          contract.client.clientLogo
+          contract.client.clientLogo,
         );
       }
 
@@ -477,7 +715,7 @@ exports.getCompanyAdminContracts = async (req, res) => {
           (doc) => ({
             ...doc,
             fileUrl: getFileUrl(req, doc.fileUrl),
-          })
+          }),
         );
       }
 
@@ -547,10 +785,7 @@ exports.getSingleCompanyAdminContract = async (req, res) => {
     }
 
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(
-        req,
-        contract.client.clientLogo
-      );
+      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
     }
 
     if (contract.additionalDocuments?.length) {
@@ -558,7 +793,7 @@ exports.getSingleCompanyAdminContract = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        })
+        }),
       );
     }
 

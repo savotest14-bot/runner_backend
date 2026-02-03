@@ -8,7 +8,7 @@ const propertySchema = new mongoose.Schema(
     },
     propertyType: {
       type: String,
-      enum: ["house", "apartment", "commercial", "other"],
+      enum: ["house", "apartment", "commercial", "residential", "other"],
     },
     description: String,
 
@@ -28,7 +28,7 @@ const propertySchema = new mongoose.Schema(
       default: false,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Property", propertySchema);
