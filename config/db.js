@@ -34,6 +34,7 @@ const connectDBAndSeed = async () => {
           permissions: [
             PERMISSIONS.CREATE_GROUP,
             PERMISSIONS.UPDATE_GROUP,
+            PERMISSIONS.DELETE_GROUP,
             PERMISSIONS.VIEW_GROUP,
 
             PERMISSIONS.CREATE_USER,

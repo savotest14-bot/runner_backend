@@ -38,7 +38,8 @@ app.use("/api/employee", employeeRoutes);
 app.use("/api/contract", contractRoutes);
 app.use("/api/company-admin", companyAdminRoutes);
 app.use("/api/task", taskRoutes);
-app.use("/api/plan", planRoutes)
+app.use("/api/plan", planRoutes);
+app.use("/api/group", require("./routes/group"));
 
 
 /* ============================= SERVER ============================= */

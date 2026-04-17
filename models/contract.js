@@ -63,7 +63,11 @@ const contractSchema = new mongoose.Schema(
             type: Number,
             required: true,
         },
-
+        group: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Group",
+            default: null
+        },
         company: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Company",
@@ -105,5 +109,7 @@ const contractSchema = new mongoose.Schema(
     },
     { timestamps: true }
 );
+
+contractSchema.index({ group: 1, company: 1 });
 
 module.exports = mongoose.model("Contract", contractSchema);
