@@ -18,6 +18,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const TokenBlacklist = require("../models/tokenBlacklist");
 const Company = require("../models/company");
+const Group = require("../models/group");
 
 
 const ROLES = {
@@ -57,9 +58,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // const gensalt = await bcrypt.genSalt(10);
-    //        hashedPassword = await bcrypt.hash(password, gensalt);
-    //        console.log("hashedPassword", hashedPassword)
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
       return res.status(401).json({
@@ -133,6 +131,32 @@ exports.login = async (req, res) => {
       { expiresIn: "5d" }
     );
 
+    let isGroupAdmin = false;
+    let groupRoles = [];
+
+    if (user.role.name === ROLES.EMPLOYEE) {
+      const groups = await Group.find({
+        "members.user": user._id,
+      }).select("members task contract assignmentType");
+
+      groupRoles = groups.map(group => {
+        const member = group.members.find(
+          m => m.user.toString() === user._id.toString()
+        );
+
+        if (member?.role === "GROUP_ADMIN") {
+          isGroupAdmin = true;
+        }
+
+        return {
+          groupId: group._id,
+          role: member?.role,
+          task: group.task,
+          contract: group.contract,
+          assignmentType: group.assignmentType
+        };
+      });
+    }
     return res.status(200).json({
       message: "Login successful",
       token,
@@ -149,6 +173,8 @@ exports.login = async (req, res) => {
         // scope: user.role.scope,
         // permissions: user.role.permissions,
         // company: user.company || null,
+        isGroupAdmin,
+        // groupRoles
       },
     });
   } catch (error) {
@@ -432,10 +458,70 @@ exports.logout = async (req, res) => {
   }
 };
 
+
 exports.getRoles = async (req, res) => {
-  const user = req.user;
-  return res.status(200).json({ message: "Roles fetched successfully", user });
-}
+  try {
+    const user = req.user;
+
+    let isGroupAdmin = false;
+    let groupRoles = [];
+
+    // ======================================================
+    // ✅ Get all groups where user exists
+    // ======================================================
+    const groups = await Group.find({
+      company: user.company,
+      isDeleted: false,
+      "members.user": user._id,
+    })
+      .select("members task assignmentType")
+      .lean();
+
+    // ======================================================
+    // ✅ Extract roles
+    // ======================================================
+    groupRoles = groups.map(group => {
+      const member = group.members.find(
+        m => m.user.toString() === user._id.toString()
+      );
+
+      if (member?.role === "GROUP_ADMIN") {
+        isGroupAdmin = true;
+      }
+
+      return {
+        groupId: group._id,
+        role: member?.role || "EMPLOYEE",
+        task: group.task || null,
+        assignmentType: group.assignmentType,
+      };
+    });
+
+    // ======================================================
+    // ✅ FINAL RESPONSE
+    // ======================================================
+    return res.status(200).json({
+      message: "Roles fetched successfully",
+      data: {
+        user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role.name,
+        },
+        isGroupAdmin,
+        // groupRoles,
+      },
+    });
+
+  } catch (error) {
+    console.error("Get roles error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch roles",
+    });
+  }
+};
 
 exports.companyAdminSignup = async (req, res) => {
   try {

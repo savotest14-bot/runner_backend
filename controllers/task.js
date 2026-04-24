@@ -3,6 +3,11 @@ const { getFileUrl } = require("../functions/common");
 const Task = require("../models/task");
 const User = require("../models/user");
 const mongoose = require("mongoose");
+const SubTask = require("../models/subtask");
+const Property = require("../models/property");
+const fs = require("fs");
+const WorkReport = require("../models/WorkReport");
+
 
 exports.getAllTasksForCompanyAdmin = async (req, res) => {
   try {
@@ -27,7 +32,7 @@ exports.getAllTasksForCompanyAdmin = async (req, res) => {
       filter.status = status;
     }
 
-    let taskIdsFromContract = null;
+    // ✅ FILTER BY CONTRACT
     if (contractId) {
       const contract = await Contract.findOne({
         _id: contractId,
@@ -41,14 +46,22 @@ exports.getAllTasksForCompanyAdmin = async (req, res) => {
         });
       }
 
-      taskIdsFromContract = contract.tasks;
-      filter._id = { $in: taskIdsFromContract };
+      filter._id = { $in: contract.tasks };
     }
 
     const tasks = await Task.find(filter)
-      .populate("assignedTo", "firstName lastName email")
       .populate("assignedBy", "firstName lastName email")
       .populate("company", "companyName")
+
+      // ✅ FIXED: SUBTASK POPULATE
+      .populate({
+        path: "subTasks",
+        populate: {
+          path: "assignedTo",
+          select: "firstName lastName email",
+        },
+      })
+
       .sort({ createdAt: -1 })
       .skip(Number(skip))
       .limit(Number(limit))
@@ -63,6 +76,7 @@ exports.getAllTasksForCompanyAdmin = async (req, res) => {
       limit: Number(limit),
       data: tasks,
     });
+
   } catch (error) {
     console.error("Get all tasks error:", error);
     return res.status(500).json({
@@ -76,9 +90,13 @@ exports.getTaskByIdForCompanyAdmin = async (req, res) => {
     const user = req.user;
     const { taskId } = req.params;
 
-    if (user.role.name !== "company_admin") {
+    if (
+      !user ||
+      !user.role ||
+      !["group_admin", "company_admin", "employee"].includes(user.role.name)
+    ) {
       return res.status(403).json({
-        message: "Only company admin can access tasks",
+        message: "You do not have access to this route",
       });
     }
 
@@ -93,8 +111,17 @@ exports.getTaskByIdForCompanyAdmin = async (req, res) => {
       company: user.company,
       isDeleted: false,
     })
-      .populate("assignedTo", "firstName lastName email phone")
       .populate("assignedBy", "firstName lastName email")
+
+      // ✅ FIXED: SUBTASK POPULATION
+      .populate({
+        path: "subTasks",
+        populate: {
+          path: "assignedTo",
+          select: "firstName lastName email phone",
+        },
+      })
+
       .lean();
 
     if (!task) {
@@ -118,8 +145,12 @@ exports.getTaskByIdForCompanyAdmin = async (req, res) => {
       });
     }
 
+    // ✅ FILE URL FIX
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
+      contract.client.clientLogo = getFileUrl(
+        req,
+        contract.client.clientLogo
+      );
     }
 
     if (contract.additionalDocuments?.length) {
@@ -127,7 +158,7 @@ exports.getTaskByIdForCompanyAdmin = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        }),
+        })
       );
     }
 
@@ -148,6 +179,7 @@ exports.getTaskByIdForCompanyAdmin = async (req, res) => {
         property: contract.property,
       },
     });
+
   } catch (error) {
     console.error("Get task by id error:", error);
     return res.status(500).json({
@@ -157,75 +189,73 @@ exports.getTaskByIdForCompanyAdmin = async (req, res) => {
 };
 
 const filterValidObjectIds = (ids = []) =>
-  ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+  ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
 
-exports.assignUsersToTask = async (req, res) => {
+exports.assignUsersToSubTask = async (req, res) => {
   try {
-    const { taskId } = req.params;
+    const { subTaskId } = req.params;
     let { userIds, removeUserIds } = req.body;
+    console.log("hhhhhhhhhhhhhhhhhh")
+    const subTask = await SubTask.findById(subTaskId);
 
-    const task = await Task.findById(taskId);
-    if (!task || task.isDeleted) {
-      return res.status(404).json({ message: "Task not found" });
+    if (!subTask) {
+      return res.status(404).json({ message: "SubTask not found" });
     }
 
-    // ===== REMOVE FIRST =====
+    // ===== REMOVE USERS =====
     if (Array.isArray(removeUserIds) && removeUserIds.length > 0) {
-
       removeUserIds = filterValidObjectIds(removeUserIds);
 
       if (removeUserIds.length > 0) {
-        await Task.findByIdAndUpdate(taskId, {
-          $pull: { assignedTo: { $in: removeUserIds } }
+        await SubTask.findByIdAndUpdate(subTaskId, {
+          $pull: { assignedTo: { $in: removeUserIds } },
         });
       }
     }
 
-    // ===== ADD AFTER =====
+    // ===== ADD USERS =====
     if (Array.isArray(userIds) && userIds.length > 0) {
-
       userIds = filterValidObjectIds(userIds);
 
       if (userIds.length > 0) {
-
-        const validAddUsers = await User.find({
+        const validUsers = await User.find({
           _id: { $in: userIds },
-          isDeleted: false
+          isDeleted: false,
         }).select("_id");
 
-        const validAddUserIds = validAddUsers.map(u => u._id);
+        const validUserIds = validUsers.map((u) => u._id);
 
-        await Task.findByIdAndUpdate(taskId, {
+        await SubTask.findByIdAndUpdate(subTaskId, {
           $addToSet: {
-            assignedTo: { $each: validAddUserIds }
+            assignedTo: { $each: validUserIds },
           },
-          assignedBy: req.user._id
+          assignedBy: req.user._id,
         });
       }
     }
 
-    const updatedTask = await Task.findById(taskId)
+    const updatedSubTask = await SubTask.findById(subTaskId)
       .populate("assignedTo", "firstName lastName email")
       .populate("assignedBy", "firstName lastName");
 
     return res.status(200).json({
       success: true,
-      message: "Task users updated successfully",
-      data: updatedTask,
+      message: "SubTask users updated successfully",
+      data: updatedSubTask,
     });
 
   } catch (error) {
     console.error("Assign/remove users error:", error);
-    res.status(500).json({
-      message: "Failed to update task users",
+    return res.status(500).json({
+      message: "Failed to update subtask users",
     });
   }
 };
 
 
-exports.removeUsersFromTask = async (req, res) => {
+exports.removeUsersFromSubTask = async (req, res) => {
   try {
-    const { taskId } = req.params;
+    const { subTaskId } = req.params;
     const { userIds } = req.body;
 
     if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -234,18 +264,30 @@ exports.removeUsersFromTask = async (req, res) => {
       });
     }
 
-    const task = await Task.findById(taskId);
-    if (!task || task.isDeleted) {
-      return res.status(404).json({
-        message: "Task not found",
+    // ✅ VALIDATE IDS
+    const validUserIds = userIds.filter((id) =>
+      mongoose.Types.ObjectId.isValid(id)
+    );
+
+    if (validUserIds.length === 0) {
+      return res.status(400).json({
+        message: "No valid userIds provided",
       });
     }
 
-    const updatedTask = await Task.findByIdAndUpdate(
-      taskId,
+    const subTask = await SubTask.findById(subTaskId);
+
+    if (!subTask) {
+      return res.status(404).json({
+        message: "SubTask not found",
+      });
+    }
+
+    const updatedSubTask = await SubTask.findByIdAndUpdate(
+      subTaskId,
       {
         $pull: {
-          assignedTo: { $in: userIds },
+          assignedTo: { $in: validUserIds },
         },
       },
       { new: true }
@@ -255,9 +297,10 @@ exports.removeUsersFromTask = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Users removed from task successfully",
-      data: updatedTask,
+      message: "Users removed from subtask successfully",
+      data: updatedSubTask,
     });
+
   } catch (error) {
     console.error("Remove users error:", error);
     return res.status(500).json({
@@ -268,87 +311,490 @@ exports.removeUsersFromTask = async (req, res) => {
 
 
 
-exports.startTaskTimer = async (req, res) => {
+exports.startSubTaskTimer = async (req, res) => {
   try {
-    const { taskId } = req.params;
-
+    const { subTaskId } = req.params;
     const employeeId = req.user._id;
 
-    const task = await Task.findOne({
-      _id: taskId,
-      assignedTo: employeeId,
-      isDeleted: false,
+    if (!mongoose.Types.ObjectId.isValid(subTaskId)) {
+      return res.status(400).json({
+        message: "Invalid subTask id",
+      });
+    }
+
+    const startTime = new Date();
+
+    const subTask = await SubTask.findOne({
+      _id: subTaskId,
+      assignedTo: { $in: [employeeId] },
+      timerStartedAt: null,
+      status: "pending",
     });
 
-    if (!task) {
-      return res.status(404).json({
-        message: "Task not found or not assigned to you",
-      });
-    }
-
-    // Prevent restart
-    if (task.timerStartedAt) {
+    if (!subTask) {
       return res.status(400).json({
-        message: "Timer already started",
+        message:
+          "SubTask not found, not assigned, already started, or not in pending state",
       });
     }
 
-    // ===== Helper Function =====
-    function calculateTaskEnd(startDate, duration, unit) {
-      const end = new Date(startDate);
+    // ✅ FIXED LOGIC
+    const duration = Number(subTask.estimatedDurationSeconds) || 0;
 
-      switch (unit) {
-        case "years":
-          end.setFullYear(end.getFullYear() + duration);
-          break;
-        case "months":
-          end.setMonth(end.getMonth() + duration);
-          break;
-        case "days":
-          end.setDate(end.getDate() + duration);
-          break;
-        case "hours":
-          end.setHours(end.getHours() + duration);
-          break;
-        case "minutes":
-          end.setMinutes(end.getMinutes() + duration);
-          break;
-        case "seconds":
-          end.setSeconds(end.getSeconds() + duration);
-          break;
-      }
+    let expectedEndTime = null;
 
-      return end;
+    if (duration > 0) {
+      expectedEndTime = new Date(
+        startTime.getTime() + duration * 1000
+      );
     }
 
-    // ===== Start Timer =====
-    const now = new Date();
+    console.log("Estimated:", duration);
+    console.log("ExpectedEndTime:", expectedEndTime);
 
-    task.timerStartedAt = now;
+    subTask.timerStartedAt = startTime;
+    subTask.expectedEndTime = expectedEndTime;
+    subTask.status = "in_progress";
 
-    task.taskEndAt = calculateTaskEnd(
-      now,
-      Number(task.taskDuration),
-      task.taskDurationUnit
+    await subTask.save();
+
+    await Task.findOneAndUpdate(
+      {
+        _id: subTask.task,
+        status: "pending",
+      },
+      {
+        status: "in_progress",
+      }
     );
 
-    task.status = "in_progress";
-
-    await task.save();
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Task timer started",
+      message: "SubTask timer started successfully",
       data: {
-        timerStartedAt: task.timerStartedAt,
-        taskEndAt: task.taskEndAt,
+        subTaskId: subTask._id,
+        timerStartedAt: subTask.timerStartedAt,
+        expectedEndTime: subTask.expectedEndTime,
+        status: subTask.status,
       },
     });
 
   } catch (error) {
-    console.error("Start task timer error:", error);
-    res.status(500).json({
-      message: "Failed to start task timer",
+    console.error("Start subtask timer error:", error);
+    return res.status(500).json({
+      message: "Failed to start subtask timer",
     });
+  }
+};
+
+
+const generateWorkReport = async (taskId, session) => {
+
+  const existingReport = await WorkReport.findOne({ task: taskId }).session(session);
+  if (existingReport) return existingReport;
+
+  const subTasks = await SubTask.find({
+    task: taskId,
+    status: "completed",
+  }).session(session);
+
+  const contract = await Contract.findOne({ tasks: taskId }).session(session);
+  if (!contract) throw new Error("Contract not found");
+
+  let totalSeconds = 0;
+  const employeeMap = {};
+
+  const completedSubTasks = subTasks.map((s) => {
+    const time = s.totalTimeSeconds || 0;
+    totalSeconds += time;
+
+    s.assignedTo.forEach((empId) => {
+      const id = empId.toString();
+
+      if (!employeeMap[id]) {
+        employeeMap[id] = {
+          employee: empId,
+          totalTimeSeconds: 0,
+          totalTasks: 0,
+          totalAmount: 0, // only for per_service
+        };
+      }
+
+      employeeMap[id].totalTimeSeconds += time;
+      employeeMap[id].totalTasks += 1;
+      employeeMap[id].totalAmount += s.subtaskPrice || 0;
+    });
+
+    return {
+      subTaskId: s._id,
+      name: s.subTaskName,
+      price: s.subtaskPrice, // reference only
+      timeSeconds: time,
+      assignedTo: s.assignedTo,
+    };
+  });
+
+  return await WorkReport.create(
+    [
+      {
+        task: taskId,
+        contract: contract._id,
+        employees: Object.keys(employeeMap),
+        company: contract.company,
+        employeeBreakdown: Object.values(employeeMap),
+        totalTimeSeconds: totalSeconds,
+        totalHours: totalSeconds / 3600,
+        completedSubTasks,
+        status: "draft",      // ✅ important
+        isEditable: true,     // ✅ important
+        reviewStatus:"pending"
+      },
+    ],
+    { session }
+  );
+};
+
+
+exports.stopSubTaskTimer = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { subTaskId } = req.params;
+    const employeeId = req.user._id;
+
+    // ✅ Validate ID
+    if (!mongoose.Types.ObjectId.isValid(subTaskId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid subTask id",
+      });
+    }
+
+    // ✅ Get subtask
+    const subTask = await SubTask.findOne({
+      _id: subTaskId,
+      assignedTo: employeeId,
+    }).session(session);
+
+    if (!subTask) {
+      throw new Error("SubTask not found or not assigned");
+    }
+
+    if (subTask.status === "completed") {
+      throw new Error("SubTask already completed");
+    }
+
+    if (!subTask.timerStartedAt) {
+      throw new Error("Timer not started");
+    }
+
+    const now = new Date();
+    const startTime = new Date(subTask.timerStartedAt);
+
+    const workedSeconds = Math.max(
+      0,
+      Math.floor((now - startTime) / 1000)
+    );
+
+    // ================= UPDATE SUBTASK =================
+
+    subTask.totalTimeSeconds =
+      (subTask.totalTimeSeconds || 0) + workedSeconds;
+
+    subTask.timerCompletedAt = now;
+    subTask.timerStartedAt = null;
+    subTask.status = "completed";
+
+    await subTask.save({ session });
+
+    // ================= CHECK TASK STATUS =================
+
+    const subTasks = await SubTask.find({
+      task: subTask.task,
+    }).session(session);
+
+    const allCompleted = subTasks.every(
+      (s) => s.status === "completed"
+    );
+
+    const taskStatus = allCompleted ? "completed" : "in_progress";
+
+    await Task.findByIdAndUpdate(
+      subTask.task,
+      { status: taskStatus },
+      { session }
+    );
+
+    // ================= GENERATE REPORT =================
+
+    if (taskStatus === "completed") {
+      await generateWorkReport(subTask.task, session);
+    }
+
+    // ================= COMMIT =================
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json({
+      success: true,
+      message: "SubTask timer stopped successfully",
+      data: {
+        subTaskId: subTask._id,
+        workedSeconds,
+        totalTimeSeconds: subTask.totalTimeSeconds,
+        status: subTask.status,
+        taskStatus,
+      },
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+
+    console.error("Stop subtask timer error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to stop subtask timer",
+    });
+  }
+};
+
+
+exports.getMySubTasks = async (req, res) => {
+  try {
+    const employeeId = req.user._id;
+
+    const { status, page = 1, limit = 10 } = req.query;
+
+    const skip = (page - 1) * limit;
+
+    const filter = {
+      assignedTo: employeeId,
+      ...(status && { status }),
+    };
+
+    const subTasks = await SubTask.find(filter)
+      .populate({
+        path: "task",
+        select: "taskName taskCategory taskSubCategory taskPrice status",
+      })
+      .populate("assignedBy", "firstName lastName email")
+
+      .sort({ createdAt: -1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
+      .lean();
+
+    const total = await SubTask.countDocuments(filter);
+
+    return res.status(200).json({
+      success: true,
+      data: subTasks,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+
+  } catch (error) {
+    console.error("Get my subtasks error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch subtasks",
+    });
+  }
+};
+
+const cleanupFiles = (files) => {
+  if (!files || files.length === 0) return;
+
+  files.forEach(file => {
+    if (fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
+  });
+};
+
+
+exports.checkGeoFence = async (req, res, next) => {
+  try {
+    const { subTaskId } = req.params;
+    const { lat, lng } = req.body;
+    if (!lat || !lng) {
+      cleanupFiles(req.files);
+      return res.status(400).json({
+        message: "Latitude and Longitude are required",
+      });
+    }
+
+    const subTask = await SubTask.findById(subTaskId);
+    if (!subTask) {
+      cleanupFiles(req.files);
+      return res.status(404).json({ message: "SubTask not found" });
+    }
+
+    const task = await Task.findById(subTask.task);
+    const contract = await Contract.findOne({ tasks: task._id });
+    const property = await Property.findById(contract.property);
+
+    const isWithinRange = await Property.findOne({
+      _id: property._id,
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: [Number(lng), Number(lat)],
+          },
+          $maxDistance: 1500,
+        },
+      },
+    });
+
+    if (!isWithinRange) {
+      cleanupFiles(req.files); // 🔥 DELETE uploaded files
+      return res.status(403).json({
+        message: "You are not within 600 meters of the property",
+      });
+    }
+
+    next();
+  } catch (err) {
+    cleanupFiles(req.files); // 🔥 safety cleanup
+    console.error(err);
+    res.status(500).json({ message: "Geo-fence check failed" });
+  }
+};
+
+exports.uploadBeforeWorkImage = async (req, res) => {
+  try {
+    const { subTaskId } = req.params;
+    const employeeId = req.user._id;
+
+    const subTask = await SubTask.findById(subTaskId);
+
+    if (!subTask) {
+      return res.status(404).json({
+        message: "SubTask not found",
+      });
+    }
+
+    // ✅ Assignment Check
+    const isAssigned = subTask.assignedTo.some(id =>
+      id.equals(employeeId)
+    );
+
+    if (!isAssigned) {
+      return res.status(403).json({
+        message: "You are not assigned to this subtask",
+      });
+    }
+
+    // ✅ Status Check
+    if (!["pending", "in_progress"].includes(subTask.status)) {
+      return res.status(400).json({
+        message: "Only pending or in_process tasks can be updated",
+      });
+    }
+
+    // ❗ FIX: Handle multiple files
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        message: "No images uploaded",
+      });
+    }
+    const images = req.files.map(file => ({
+      url: `uploads/workImage/${file.filename}`,
+      uploadedBy: employeeId,
+    }));
+
+    subTask.beforeWorkImages.push(...images);
+
+    await subTask.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Before work images uploaded",
+      data: subTask.beforeWorkImages,
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Upload failed" });
+  }
+};
+
+
+exports.uploadAfterWorkImage = async (req, res) => {
+  try {
+    const { subTaskId } = req.params;
+    const employeeId = req.user._id;
+    const { description } = req.body;
+
+    const subTask = await SubTask.findById(subTaskId);
+
+    if (!subTask) {
+      return res.status(404).json({
+        message: "SubTask not found",
+      });
+    }
+
+    // ✅ Assignment Check
+    const isAssigned = subTask.assignedTo.some(id =>
+      id.equals(employeeId)
+    );
+
+    if (!isAssigned) {
+      return res.status(403).json({
+        message: "You are not assigned to this subtask",
+      });
+    }
+
+    // ✅ Status Check
+    if (subTask.status !== "completed") {
+      return res.status(400).json({
+        message: "Upload after-work image only after completion",
+      });
+    }
+
+    // 🔥 CASE 1: Images uploaded
+    if (req.files && req.files.length > 0) {
+      const images = req.files.map(file => ({
+        url: `uploads/workImage/${file.filename}`,
+        uploadedBy: employeeId,
+      }));
+
+      subTask.afterWorkImages.push(...images);
+    }
+
+    // 🔥 CASE 2: Description update
+    if (description) {
+      subTask.afterWorkImagesdescription = description;
+    }
+
+    // ❌ Nothing provided
+    if ((!req.files || req.files.length === 0) && !description) {
+      return res.status(400).json({
+        message: "Please upload image or provide description",
+      });
+    }
+
+    await subTask.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "After work updated successfully",
+      data: {
+        images: subTask.afterWorkImages,
+        description: subTask.afterWorkImagesdescription,
+      },
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Upload failed" });
   }
 };

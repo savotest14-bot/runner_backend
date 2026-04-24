@@ -9,115 +9,10 @@ const formatNumber = require("../utils/formatNumber");
 const getNextSequence = require("../utils/getNextSequence");
 const buildContractEmail = require("../services/emailTemplateBuilder");
 const { sendSimpleMail } = require("../functions/sendSimpleMail");
+const SubTask = require("../models/subtask");
 
 /**Super Admin */
 
-// exports.createContract = async (req, res) => {
-//   const session = await mongoose.startSession();
-//   session.startTransaction();
-
-//   try {
-//     if (req.user.role.name !== "superAdmin") {
-//       return res.status(403).json({ message: "Access denied" });
-//     }
-
-//     const {
-//       contractType,
-//       startDate,
-//       endDate,
-//       company,
-//       client,
-//       property,
-//       tasks = [],
-//     } = req.body;
-//     if (req.files?.clientLogo?.length) {
-//       client.clientLogo = req.files.clientLogo[0].path;
-//     }
-
-//     const additionalDocuments =
-//       req.files?.additionalDocuments?.map((file) => ({
-//         fileName: file.originalname,
-//         fileUrl: file.path,
-//       })) || [];
-
-//     const createdClient = await Client.create([{ ...client, company }], {
-//       session,
-//     });
-//     const createdProperty = await Property.create(
-//       [
-//         {
-//           ...property,
-//           client: createdClient[0]._id,
-//         },
-//       ],
-//       { session },
-//     );
-
-//     const taskDocs = tasks.map((task) => ({
-//       ...task,
-//       company,
-//       assignedBy: req.user._id,
-//     }));
-
-//     const createdTasks = taskDocs.length
-//       ? await Task.create(taskDocs, { session })
-//       : [];
-
-//     const totalTasks = createdTasks.length;
-//     const totalTimeDays = createdTasks.reduce(
-//       (sum, t) => sum + (t.taskTime || 0),
-//       0,
-//     );
-//     const totalCost = createdTasks.reduce(
-//       (sum, t) => sum + (t.taskPrice || 0),
-//       0,
-//     );
-//     const invoiceSeq = await getNextSequence("invoice", session);
-//     const referenceSeq = await getNextSequence("reference", session);
-
-//     const invoiceNumber = formatNumber("RUNIV", invoiceSeq, 2);
-//     const referenceNumber = formatNumber("INV", referenceSeq, 3);
-//     const contractNumber = `CON-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-//     const contract = await Contract.create(
-//       [
-//         {
-//           contractNumber,
-//           invoiceNumber,
-//           referenceNumber,
-//           contractType,
-//           startDate,
-//           endDate,
-//           client: createdClient[0]._id,
-//           property: createdProperty[0]._id,
-//           tasks: createdTasks.map((t) => t._id),
-//           totalTasks,
-//           totalTimeDays,
-//           totalCost,
-//           company,
-//           createdBy: req.user._id,
-//           additionalDocuments,
-//         },
-//       ],
-//       { session },
-//     );
-
-//     await session.commitTransaction();
-//     session.endSession();
-
-//     res.status(201).json({
-//       success: true,
-//       message: "Contract created successfully",
-//       data: contract[0],
-//     });
-//   } catch (err) {
-//     await session.abortTransaction();
-//     session.endSession();
-
-//     console.error(err);
-//     res.status(500).json({ message: "Failed to create contract" });
-//   }
-// };
 
 const parseIfString = (data, fieldName) => {
   try {
@@ -129,9 +24,12 @@ const parseIfString = (data, fieldName) => {
     throw new Error(`Invalid JSON format in field: ${fieldName}`);
   }
 };
+
+
 exports.createContract = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
+
   try {
     if (req.user.role.name !== "superAdmin") {
       return res.status(403).json({ message: "Access denied" });
@@ -145,60 +43,61 @@ exports.createContract = async (req, res) => {
       client,
       property,
       tasks = [],
+      billingType = "per_service",
+      hourlyRate = 0
     } = req.body;
 
-    try {
-      client = parseIfString(client, "client");
-      property = parseIfString(property, "property");
-      tasks = parseIfString(tasks, "tasks");
-    } catch (err) {
-      return res.status(400).json({
-        success: false,
-        message: err.message,
-      });
-    }
-    const companyDetails = await Company.findOne(
-      { _id: company },
-    );
+    client = parseIfString(client);
+    property = parseIfString(property);
+    tasks = parseIfString(tasks);
 
-    function convertToDays(duration, unit) {
-      duration = Number(duration) || 0;
+    // ================= FETCH COMPANY =================
+    const companyDetails = await Company.findById(company);
 
-      switch (unit) {
-        case "years":
-          return duration * 365;
-        case "months":
-          return duration * 30;
-        case "days":
-          return duration;
-        case "hours":
-          return duration / 24;
-        case "minutes":
-          return duration / (24 * 60);
-        case "seconds":
-          return duration / (24 * 60 * 60);
-        default:
-          return 0;
+    // ================= HELPERS =================
+    const normalizeAssignedTo = (assigned) => {
+      if (!assigned) return [];
+
+      if (Array.isArray(assigned)) {
+        return assigned.map((id) => id.toString().trim()).filter(Boolean);
       }
-    }
 
-    // ================= CLIENT LOGO =================
+      if (typeof assigned === "object") {
+        return Object.values(assigned).map((id) =>
+          id.toString().trim()
+        );
+      }
 
-    if (req.files?.clientLogo?.length) {
-      client.clientLogo = req.files.clientLogo[0].path;
-    }
+      if (typeof assigned === "string") {
+        return assigned
+          .replace(/[\[\]'"]/g, "")
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
+      }
 
-    const additionalDocuments =
-      req.files?.additionalDocuments?.map((file) => ({
-        fileName: file.originalname,
-        fileUrl: file.path,
-      })) || [];
+      return [];
+    };
 
+    const toSeconds = (value, unit) => {
+      const map = {
+        years: 31536000,
+        months: 2592000,
+        days: 86400,
+        hours: 3600,
+        minutes: 60,
+        seconds: 1,
+      };
+      return Number(value) * (map[unit] || 1);
+    };
+
+    // ================= CLIENT =================
     const [createdClient] = await Client.create(
       [{ ...client, company }],
       { session }
     );
 
+    // ================= PROPERTY =================
     const [createdProperty] = await Property.create(
       [
         {
@@ -209,60 +108,82 @@ exports.createContract = async (req, res) => {
       { session }
     );
 
+    // ================= TASK + SUBTASK =================
     const createdTasks = [];
+    let totalEstimatedSeconds = 0;
+    let totalCost = 0;
 
-    for (const task of tasks) {
+    for (const task of tasks || []) {
+
       const [createdTask] = await Task.create(
         [
           {
             taskName: task.taskName,
             taskCategory: task.taskCategory,
             taskSubCategory: task.taskSubCategory,
-
-            taskDuration: Number(task.taskDuration),
-            taskDurationUnit: task.taskDurationUnit,
-
-            taskPrice: Number(task.taskPrice) || 0,
-            description: task.description,
-            dueDate: task.dueDate,
-
+            taskDescription: task.description,
+            scheduledDate: task.scheduledDate,
+            taskPrice: 0,
             company,
-            assignedTo: task.assignedTo || [],
             assignedBy: req.user._id,
-
-            // ✅ TIMER NOT STARTED YET
-            timerStartedAt: null,
-            timerCompletedAt: null,
-            taskEndAt: null,
-
             status: "pending",
           },
         ],
         { session }
       );
 
+      let taskTotalPrice = 0;
+      const subTaskIds = [];
+
+      for (const sub of task.subTasks || []) {
+
+        if (!sub.taskDuration || !sub.taskDurationUnit) {
+          throw new Error("SubTask duration required");
+        }
+
+        if (sub.subtaskPrice === undefined) {
+          throw new Error("SubTask price is required");
+        }
+
+        const estimatedSeconds = toSeconds(
+          sub.taskDuration,
+          sub.taskDurationUnit
+        );
+
+        const subPrice = Number(sub.subtaskPrice) || 0;
+
+        const [createdSubTask] = await SubTask.create(
+          [
+            {
+              subTaskName: sub.subTaskName,
+              task: createdTask._id,
+              assignedTo: normalizeAssignedTo(sub.assignedTo),
+              assignedBy: req.user._id,
+              company,
+              estimatedDurationSeconds: estimatedSeconds,
+              subtaskPrice: subPrice,
+              status: "pending",
+            },
+          ],
+          { session }
+        );
+
+        subTaskIds.push(createdSubTask._id);
+
+        taskTotalPrice += subPrice;
+        totalEstimatedSeconds += estimatedSeconds;
+      }
+
+      createdTask.subTasks = subTaskIds;
+      createdTask.taskPrice = taskTotalPrice;
+
+      await createdTask.save({ session });
+
+      totalCost += taskTotalPrice;
       createdTasks.push(createdTask);
     }
 
-    // ================= CALCULATIONS =================
-
-    const freshTasks = await Task.find(
-      { _id: { $in: createdTasks.map(t => t._id) } },
-      null,
-      { session }
-    );
-
-    const totalTasks = freshTasks.length;
-
-    const totalTimeDays = freshTasks.reduce((sum, t) => {
-      return sum + convertToDays(t.taskDuration, t.taskDurationUnit);
-    }, 0);
-    const totalCost = freshTasks.reduce((sum, t) => {
-      return sum + (Number(t.taskPrice) || 0);
-    }, 0);
-
-    // ================= NUMBERS =================
-
+    // ================= INVOICE + REFERENCE =================
     const invoiceSeq = await getNextSequence("invoice", session);
     const referenceSeq = await getNextSequence("reference", session);
 
@@ -274,8 +195,7 @@ exports.createContract = async (req, res) => {
       .slice(0, 10)
       .replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // ================= CREATE CONTRACT =================
-
+    // ================= CONTRACT =================
     const [contract] = await Contract.create(
       [
         {
@@ -288,25 +208,26 @@ exports.createContract = async (req, res) => {
 
           client: createdClient._id,
           property: createdProperty._id,
-
           tasks: createdTasks.map((t) => t._id),
 
-          totalTasks,
-          totalTimeDays,
+          totalTasks: createdTasks.length,
+          totalEstimatedSeconds,
           totalCost,
-
+          billingType,
+          hourlyRate,
           company,
           createdBy: req.user._id,
-          additionalDocuments,
+          emailStatus: "pending",
         },
       ],
       { session }
     );
 
-
+    // ================= COMMIT =================
     await session.commitTransaction();
     session.endSession();
 
+    // ================= EMAIL (YOUR STYLE) =================
     try {
 
       const emailHtml = await buildContractEmail({
@@ -315,12 +236,12 @@ exports.createContract = async (req, res) => {
         company: companyDetails,
         templateCode: req.body.emailTemplateCode || "invoice_v1",
         themeName: req.body.theme || "blue",
-        frontendUrl: process.env.BACKEND_URL
+        frontendUrl: process.env.BACKEND_URL // ✅ FIXED
       });
 
       await sendSimpleMail({
         to: createdClient.email,
-        subject: `Invoice ${contract.invoiceNumber}`,
+        subject: `Invoice ${contract.invoiceNumber}`, // ✅ YOUR REQUIREMENT
         html: emailHtml
       });
 
@@ -328,20 +249,24 @@ exports.createContract = async (req, res) => {
       await contract.save();
 
     } catch (emailError) {
-      console.error("Email send failed:", emailError);
+      console.error("Email send failed:", emailError.message);
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Contract created successfully",
-      data: contract[0],
+      data: contract,
     });
+
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
 
     console.error(err);
-    res.status(500).json({ message: "Failed to create contract" });
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Failed to create contract",
+    });
   }
 };
 
@@ -371,11 +296,13 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
       .populate("createdBy", "firstName lastName email")
       .populate({
         path: "tasks",
-        select:
-          "taskName taskCategory taskSubCategory taskTime taskPrice status assignedTo dueDate",
+        select: "taskName taskCategory taskSubCategory taskPrice status",
         populate: {
-          path: "assignedTo",
-          select: "firstName lastName email",
+          path: "subTasks",
+          populate: {
+            path: "assignedTo",
+            select: "firstName lastName email",
+          },
         },
       })
       .lean();
@@ -386,8 +313,12 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
       });
     }
 
+    // ✅ FIX FILE URLS
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
+      contract.client.clientLogo = getFileUrl(
+        req,
+        contract.client.clientLogo
+      );
     }
 
     if (contract.additionalDocuments?.length) {
@@ -395,7 +326,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        }),
+        })
       );
     }
 
@@ -403,6 +334,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
       success: true,
       data: contract,
     });
+
   } catch (error) {
     console.error("Get contract by superAdmin error:", error);
     return res.status(500).json({
@@ -478,15 +410,20 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
       .populate("property", "propertyName propertyType sizeSqm")
       .populate("company", "companyName")
       .populate("createdBy", "firstName lastName email")
+
+      // ✅ FIXED HERE
       .populate({
         path: "tasks",
-        select:
-          "taskName taskCategory taskSubCategory taskTime taskPrice status assignedTo dueDate",
+        select: "taskName taskCategory taskSubCategory taskPrice status",
         populate: {
-          path: "assignedTo",
-          select: "firstName lastName email",
+          path: "subTasks",
+          populate: {
+            path: "assignedTo",
+            select: "firstName lastName email",
+          },
         },
       })
+
       .lean();
 
     if (!contract) {
@@ -495,8 +432,12 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
       });
     }
 
+    // ✅ FILE URL FIX
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
+      contract.client.clientLogo = getFileUrl(
+        req,
+        contract.client.clientLogo
+      );
     }
 
     if (contract.additionalDocuments?.length) {
@@ -504,7 +445,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        }),
+        })
       );
     }
 
@@ -512,6 +453,7 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
       success: true,
       data: contract,
     });
+
   } catch (error) {
     console.error("Get contract by superAdmin error:", error);
     return res.status(500).json({
@@ -523,12 +465,233 @@ exports.getSingleContractBySuperAdmin = async (req, res) => {
 /**Company Admin */
 
 
+
+// exports.createContractByCompanyAdmin = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     if (req.user.role.name !== "company_admin") {
+//       return res.status(403).json({ message: "Access denied" });
+//     }
+
+//     let {
+//       contractType,
+//       startDate,
+//       endDate,
+//       client,
+//       property,
+//       tasks = [],
+//     } = req.body;
+
+//     client = parseIfString(client);
+//     property = parseIfString(property);
+//     tasks = parseIfString(tasks);
+//     const company = req.user.company;
+//     // ✅ NORMALIZE assignedTo
+//     const normalizeAssignedTo = (assigned) => {
+//       if (!assigned) return [];
+
+//       if (Array.isArray(assigned)) {
+//         return assigned.map((id) => id.toString().trim()).filter(Boolean);
+//       }
+
+//       if (typeof assigned === "object") {
+//         return Object.values(assigned).map((id) =>
+//           id.toString().trim()
+//         );
+//       }
+
+//       if (typeof assigned === "string") {
+//         return assigned
+//           .replace(/[\[\]'"]/g, "")
+//           .split(",")
+//           .map((id) => id.trim())
+//           .filter(Boolean);
+//       }
+
+//       return [];
+//     };
+
+//     // ✅ TIME CONVERTER
+//     const toSeconds = (value, unit) => {
+//       const map = {
+//         years: 31536000,
+//         months: 2592000,
+//         days: 86400,
+//         hours: 3600,
+//         minutes: 60,
+//         seconds: 1,
+//       };
+//       return Number(value) * (map[unit] || 1);
+//     };
+
+//     // ================= CLIENT =================
+//     const [createdClient] = await Client.create(
+//       [{ ...client, company }],
+//       { session }
+//     );
+
+//     // ================= PROPERTY =================
+//     const [createdProperty] = await Property.create(
+//       [
+//         {
+//           ...property,
+//           client: createdClient._id,
+//           location: {
+//             type: "Point",
+//             coordinates: property.location.coordinates,
+//             address: property.location.address || "",
+//           },
+//         },
+//       ],
+//       { session }
+//     );
+
+//     // ================= TASK + SUBTASK =================
+
+//     const createdTasks = [];
+//     let totalEstimatedSeconds = 0;
+//     let totalCost = 0; // 🔥 TOTAL CONTRACT COST
+
+//     for (const task of tasks || []) {
+
+//       // ✅ CREATE TASK (price = 0 initially)
+//       const [createdTask] = await Task.create(
+//         [
+//           {
+//             taskName: task.taskName,
+//             taskCategory: task.taskCategory,
+//             taskSubCategory: task.taskSubCategory,
+//             taskDescription: task.description,
+//             taskPrice: 0, // 🔥 will update later
+//             company,
+//             assignedBy: req.user._id,
+//             status: "pending",
+//           },
+//         ],
+//         { session }
+//       );
+
+//       let taskTotalPrice = 0; // 🔥 PER TASK TOTAL
+//       const subTaskIds = [];
+
+//       for (const sub of task.subTasks || []) {
+
+//         if (!sub.taskDuration || !sub.taskDurationUnit) {
+//           throw new Error("SubTask duration required");
+//         }
+
+//         if (sub.subtaskPrice === undefined) {
+//           throw new Error("SubTask price is required");
+//         }
+
+//         const estimatedSeconds = toSeconds(
+//           sub.taskDuration,
+//           sub.taskDurationUnit
+//         );
+
+//         const subPrice = Number(sub.subtaskPrice) || 0;
+
+//         const [createdSubTask] = await SubTask.create(
+//           [
+//             {
+//               subTaskName: sub.subTaskName,
+//               task: createdTask._id,
+//               assignedTo: normalizeAssignedTo(sub.assignedTo),
+//               assignedBy: req.user._id,
+//               company,
+
+//               estimatedDurationSeconds: estimatedSeconds,
+//               subtaskPrice: subPrice, // ✅ SAVE PRICE HERE
+
+//               status: "pending",
+//               timerStartedAt: null,
+//               timerCompletedAt: null,
+//               totalTimeSeconds: 0,
+//             },
+//           ],
+//           { session }
+//         );
+
+//         subTaskIds.push(createdSubTask._id);
+
+//         // ✅ SUM PRICE
+//         taskTotalPrice += subPrice;
+
+//         // ✅ SUM TIME
+//         totalEstimatedSeconds += estimatedSeconds;
+//       }
+
+//       // ✅ UPDATE TASK
+//       createdTask.subTasks = subTaskIds;
+//       createdTask.taskPrice = taskTotalPrice;
+
+//       await createdTask.save({ session });
+
+//       // ✅ ADD TO CONTRACT TOTAL
+//       totalCost += taskTotalPrice;
+
+//       createdTasks.push(createdTask);
+//     }
+
+//     // ================= CONTRACT =================
+
+//     const totalTasks = createdTasks.length;
+
+//     const contractNumber = `CON-${Date.now()}`;
+
+//     const [contract] = await Contract.create(
+//       [
+//         {
+//           contractNumber,
+//           contractType,
+//           startDate,
+//           endDate,
+
+//           client: createdClient._id,
+//           property: createdProperty._id,
+//           tasks: createdTasks.map((t) => t._id),
+
+//           totalTasks,
+//           totalEstimatedSeconds,
+//           totalCost, // 🔥 NOW CORRECT
+
+//           company,
+//           createdBy: req.user._id,
+//         },
+//       ],
+//       { session }
+//     );
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return res.status(201).json({
+//       success: true,
+//       message: "Contract created successfully",
+//       data: contract,
+//     });
+
+//   } catch (err) {
+//     await session.abortTransaction();
+//     session.endSession();
+
+//     console.error(err);
+//     return res.status(500).json({
+//       success: false,
+//       message: err.message || "Failed to create contract",
+//     });
+//   }
+// };
+
+
 exports.createContractByCompanyAdmin = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    if (req.user.role.name !== "company_admin") {
+    if (req.user.role.name !== "superAdmin") {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -539,67 +702,61 @@ exports.createContractByCompanyAdmin = async (req, res) => {
       client,
       property,
       tasks = [],
+      billingType = "per_service",
+      hourlyRate = 0
     } = req.body;
-    try {
-      client = parseIfString(client, "client");
-      property = parseIfString(property, "property");
-      tasks = parseIfString(tasks, "tasks");
-    } catch (err) {
-      return res.status(400).json({
-        success: false,
-        message: err.message,
-      });
-    }
+
+    client = parseIfString(client);
+    property = parseIfString(property);
+    tasks = parseIfString(tasks);
     const company = req.user.company;
+    // ================= FETCH COMPANY =================
+    const companyDetails = await Company.findById(company);
 
-    const companyDetails = await Company.findOne(
-      { _id: company },
-    );
+    // ================= HELPERS =================
+    const normalizeAssignedTo = (assigned) => {
+      if (!assigned) return [];
 
-    // ================= HELPER FUNCTION =================
-
-    function convertToDays(duration, unit) {
-      duration = Number(duration) || 0;
-
-      switch (unit) {
-        case "years":
-          return duration * 365;
-        case "months":
-          return duration * 30;
-        case "days":
-          return duration;
-        case "hours":
-          return duration / 24;
-        case "minutes":
-          return duration / (24 * 60);
-        case "seconds":
-          return duration / (24 * 60 * 60);
-        default:
-          return 0;
+      if (Array.isArray(assigned)) {
+        return assigned.map((id) => id.toString().trim()).filter(Boolean);
       }
-    }
 
-    // ================= CLIENT LOGO =================
+      if (typeof assigned === "object") {
+        return Object.values(assigned).map((id) =>
+          id.toString().trim()
+        );
+      }
 
-    if (req.files?.clientLogo?.length) {
-      client.clientLogo = req.files.clientLogo[0].path;
-    }
+      if (typeof assigned === "string") {
+        return assigned
+          .replace(/[\[\]'"]/g, "")
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
+      }
 
-    const additionalDocuments =
-      req.files?.additionalDocuments?.map((file) => ({
-        fileName: file.originalname,
-        fileUrl: file.path,
-      })) || [];
+      return [];
+    };
 
-    // ================= CREATE CLIENT =================
+    const toSeconds = (value, unit) => {
+      const map = {
+        years: 31536000,
+        months: 2592000,
+        days: 86400,
+        hours: 3600,
+        minutes: 60,
+        seconds: 1,
+      };
+      return Number(value) * (map[unit] || 1);
+    };
 
+    // ================= CLIENT =================
     const [createdClient] = await Client.create(
       [{ ...client, company }],
       { session }
     );
 
-    // ================= CREATE PROPERTY =================
-
+    // ================= PROPERTY =================
     const [createdProperty] = await Property.create(
       [
         {
@@ -610,62 +767,81 @@ exports.createContractByCompanyAdmin = async (req, res) => {
       { session }
     );
 
-    // ================= CREATE TASKS (NO TIMER START HERE) =================
-
+    // ================= TASK + SUBTASK =================
     const createdTasks = [];
+    let totalEstimatedSeconds = 0;
+    let totalCost = 0;
 
-    for (const task of tasks) {
+    for (const task of tasks || []) {
+
       const [createdTask] = await Task.create(
         [
           {
             taskName: task.taskName,
             taskCategory: task.taskCategory,
             taskSubCategory: task.taskSubCategory,
-
-            taskDuration: Number(task.taskDuration),
-            taskDurationUnit: task.taskDurationUnit,
-
-            taskPrice: Number(task.taskPrice) || 0,
-            description: task.description,
-            dueDate: task.dueDate,
-
+            taskDescription: task.description,
+            taskPrice: 0,
             company,
-            assignedTo: task.assignedTo || [],
             assignedBy: req.user._id,
-
-            // ✅ TIMER NOT STARTED YET
-            timerStartedAt: null,
-            timerCompletedAt: null,
-            taskEndAt: null,
-
             status: "pending",
           },
         ],
         { session }
       );
 
+      let taskTotalPrice = 0;
+      const subTaskIds = [];
+
+      for (const sub of task.subTasks || []) {
+
+        if (!sub.taskDuration || !sub.taskDurationUnit) {
+          throw new Error("SubTask duration required");
+        }
+
+        if (sub.subtaskPrice === undefined) {
+          throw new Error("SubTask price is required");
+        }
+
+        const estimatedSeconds = toSeconds(
+          sub.taskDuration,
+          sub.taskDurationUnit
+        );
+
+        const subPrice = Number(sub.subtaskPrice) || 0;
+
+        const [createdSubTask] = await SubTask.create(
+          [
+            {
+              subTaskName: sub.subTaskName,
+              task: createdTask._id,
+              assignedTo: normalizeAssignedTo(sub.assignedTo),
+              assignedBy: req.user._id,
+              company,
+              estimatedDurationSeconds: estimatedSeconds,
+              subtaskPrice: subPrice,
+              status: "pending",
+            },
+          ],
+          { session }
+        );
+
+        subTaskIds.push(createdSubTask._id);
+
+        taskTotalPrice += subPrice;
+        totalEstimatedSeconds += estimatedSeconds;
+      }
+
+      createdTask.subTasks = subTaskIds;
+      createdTask.taskPrice = taskTotalPrice;
+
+      await createdTask.save({ session });
+
+      totalCost += taskTotalPrice;
       createdTasks.push(createdTask);
     }
 
-    // ================= CALCULATIONS =================
-
-    const freshTasks = await Task.find(
-      { _id: { $in: createdTasks.map(t => t._id) } },
-      null,
-      { session }
-    );
-
-    const totalTasks = freshTasks.length;
-
-    const totalTimeDays = freshTasks.reduce((sum, t) => {
-      return sum + convertToDays(t.taskDuration, t.taskDurationUnit);
-    }, 0);
-    const totalCost = freshTasks.reduce((sum, t) => {
-      return sum + (Number(t.taskPrice) || 0);
-    }, 0);
-
-    // ================= NUMBERS =================
-
+    // ================= INVOICE + REFERENCE =================
     const invoiceSeq = await getNextSequence("invoice", session);
     const referenceSeq = await getNextSequence("reference", session);
 
@@ -677,8 +853,7 @@ exports.createContractByCompanyAdmin = async (req, res) => {
       .slice(0, 10)
       .replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // ================= CREATE CONTRACT =================
-
+    // ================= CONTRACT =================
     const [contract] = await Contract.create(
       [
         {
@@ -691,25 +866,26 @@ exports.createContractByCompanyAdmin = async (req, res) => {
 
           client: createdClient._id,
           property: createdProperty._id,
-
           tasks: createdTasks.map((t) => t._id),
 
-          totalTasks,
-          totalTimeDays,
+          totalTasks: createdTasks.length,
+          totalEstimatedSeconds,
           totalCost,
-
+          billingType,
+          hourlyRate,
           company,
           createdBy: req.user._id,
-          additionalDocuments,
+          emailStatus: "pending",
         },
       ],
       { session }
     );
 
-
+    // ================= COMMIT =================
     await session.commitTransaction();
     session.endSession();
 
+    // ================= EMAIL (YOUR STYLE) =================
     try {
 
       const emailHtml = await buildContractEmail({
@@ -718,12 +894,12 @@ exports.createContractByCompanyAdmin = async (req, res) => {
         company: companyDetails,
         templateCode: req.body.emailTemplateCode || "invoice_v1",
         themeName: req.body.theme || "blue",
-        frontendUrl: process.env.BACKEND_URL
+        frontendUrl: process.env.BACKEND_URL // ✅ FIXED
       });
 
       await sendSimpleMail({
         to: createdClient.email,
-        subject: `Invoice ${contract.invoiceNumber}`,
+        subject: `Invoice ${contract.invoiceNumber}`, // ✅ YOUR REQUIREMENT
         html: emailHtml
       });
 
@@ -731,10 +907,10 @@ exports.createContractByCompanyAdmin = async (req, res) => {
       await contract.save();
 
     } catch (emailError) {
-      console.error("Email send failed:", emailError);
+      console.error("Email send failed:", emailError.message);
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Contract created successfully",
       data: contract,
@@ -744,14 +920,13 @@ exports.createContractByCompanyAdmin = async (req, res) => {
     await session.abortTransaction();
     session.endSession();
 
-    console.error("CREATE CONTRACT ERROR:", err);
-
-    res.status(500).json({
+    console.error(err);
+    return res.status(500).json({
+      success: false,
       message: err.message || "Failed to create contract",
     });
   }
 };
-
 
 exports.getCompanyAdminContracts = async (req, res) => {
   try {
@@ -863,15 +1038,20 @@ exports.getSingleCompanyAdminContract = async (req, res) => {
       .populate("property", "propertyName propertyType sizeSqm")
       .populate("company", "companyName")
       .populate("createdBy", "firstName lastName email")
+
+      // ✅ FIXED TASK + SUBTASK STRUCTURE
       .populate({
         path: "tasks",
-        select:
-          "taskName taskCategory taskSubCategory taskTime taskPrice status assignedTo dueDate",
+        select: "taskName taskCategory taskSubCategory taskDescription taskPrice status",
         populate: {
-          path: "assignedTo",
-          select: "firstName lastName email",
+          path: "subTasks",
+          populate: {
+            path: "assignedTo",
+            select: "firstName lastName email",
+          },
         },
       })
+
       .lean();
 
     if (!contract) {
@@ -880,8 +1060,12 @@ exports.getSingleCompanyAdminContract = async (req, res) => {
       });
     }
 
+    // ✅ FILE URL FIX
     if (contract.client?.clientLogo) {
-      contract.client.clientLogo = getFileUrl(req, contract.client.clientLogo);
+      contract.client.clientLogo = getFileUrl(
+        req,
+        contract.client.clientLogo
+      );
     }
 
     if (contract.additionalDocuments?.length) {
@@ -889,7 +1073,7 @@ exports.getSingleCompanyAdminContract = async (req, res) => {
         (doc) => ({
           ...doc,
           fileUrl: getFileUrl(req, doc.fileUrl),
-        }),
+        })
       );
     }
 
@@ -897,6 +1081,7 @@ exports.getSingleCompanyAdminContract = async (req, res) => {
       success: true,
       data: contract,
     });
+
   } catch (error) {
     console.error("Get single contract error:", error);
     return res.status(500).json({
@@ -936,9 +1121,11 @@ exports.contractEmailResponse = async (req, res) => {
     if (action === "accept") {
       contract.emailStatus = "accepted";
       contract.clinetStatus = "accepted";
+      contract.status = "active";
     } else if (action === "reject") {
       contract.emailStatus = "rejected";
       contract.clinetStatus = "rejected";
+      contract.status = "cancelled";
     }
 
     contract.emailRespondedAt = new Date();

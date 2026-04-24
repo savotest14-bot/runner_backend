@@ -83,6 +83,16 @@ const contractSchema = new mongoose.Schema(
             type: [fileSchema],
             default: [],
         },
+        billingType: {
+            type: String,
+            enum: ["fixed", "per_service", "hourly"],
+            default: "per_service"
+        },
+
+        hourlyRate: {
+            type: Number,
+            default: 0
+        },
         status: {
             type: String,
             enum: ["draft", "active", "completed", "cancelled"],
@@ -111,5 +121,6 @@ const contractSchema = new mongoose.Schema(
 );
 
 contractSchema.index({ group: 1, company: 1 });
+contractSchema.index({ tasks: 1 });
 
 module.exports = mongoose.model("Contract", contractSchema);

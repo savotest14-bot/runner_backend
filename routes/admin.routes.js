@@ -35,6 +35,7 @@ const {
   getEmployeeById,
   updateCompanyStatus,
   getAllEmployeesforAssign,
+  searchCompanies,
 } = require("../controllers/admin.controller");
 
 const {
@@ -46,7 +47,7 @@ const {
   uploadContractFiles,
   uploadEmployeeImages,
 } = require("../middlewares/employeeUploads");
-const { assignUsersToTask, removeUsersFromTask } = require("../controllers/task");
+const { assignUsersToSubTask, removeUsersFromSubTask } = require("../controllers/task");
 
 /**Admin company Routes */
 
@@ -65,6 +66,7 @@ router.get(
   getAllCompanies,
 );
 
+router.get("/getCompanies", authenticate, authorize("view_company"), searchCompanies)
 router.get(
   "/active-subscription-companies",
   authenticate,
@@ -162,6 +164,7 @@ router.post(
   uploadContractFiles,
   createContract,
 );
+
 router.get(
   "/getAllContracts",
   authenticate,
@@ -184,13 +187,13 @@ router.get(
 router.get(
   "/getAllTask",
   authenticate,
-  authorize("view_task"),
+  authorize("view_tasks"),
   getAllTasksForSuperAdmin,
 );
 router.get(
   "/getTask/:id",
   authenticate,
-  authorize("view_task"),
+  authorize("view_tasks"),
   getTaskByIdForSuperAdmin,
 );
 
@@ -231,6 +234,7 @@ router.put(
 
 router.get("/getEmployee/:employeeId", authenticate, getEmployeeById);
 
-router.put("/assignUsers/:taskId", authenticate, assignUsersToTask);
-router.put("/removeUsers/:taskId", authenticate, removeUsersFromTask);
+router.put("/assignUsers/:subTaskId", authenticate, assignUsersToSubTask);
+router.put("/removeUsers/:subTaskId", authenticate, removeUsersFromSubTask);
+
 module.exports = router;

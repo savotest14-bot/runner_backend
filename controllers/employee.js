@@ -10,7 +10,12 @@ const { sendSimpleMail } = require("../functions/sendSimpleMail");
 const { employeeWelcomeTemplate } = require("../emails/employeeWelcomeTemplate");
 const { passwordUpdatedTemplate } = require("../emails/passwordUpdatedTemplate");
 const Company = require("../models/company");
-
+const SubTask = require("../models/subtask");
+const Contract = require("../models/contract");
+const Client = require("../models/client");
+const Property = require("../models/property");
+const generatePDF = require("../utils/generatePdf");
+const EmployeePayment = require("../models/EmployeePayment")
 
 
 
@@ -139,7 +144,12 @@ exports.createEmployee = async (req, res) => {
             privatePhoneNumber: req.body.privatePhoneNumber,
 
             ahvNumber: req.body.ahvNumber,
-            salaryAndWageDetails: req.body.salaryAndWageDetails,
+            employeePayment: {
+                type: req.body.paymentType || "fixed",
+                hourlyRate: Number(req.body.hourlyRate) || 0,
+                perServiceRate: Number(req.body.perServiceRate) || 0,
+                fixedSalary: Number(req.body.fixedSalary) || 0,
+            },
             childrens,
             bankAccountInformation: req.body.bankAccountInformation || null,
 
@@ -394,12 +404,336 @@ exports.getEmployeeById = async (req, res) => {
     }
 };
 
+exports.getProfileForEmployee = async (req, res) => {
+    try {
+        const employeeId = req.user._id;
+        if (!mongoose.Types.ObjectId.isValid(employeeId)) {
+            return res.status(400).json({
+                message: "Invalid employee id",
+            });
+        }
+
+        const employee = await User.findOne({
+            _id: employeeId,
+            company: req.user.company,
+            isDeleted: false,
+            employeeProfile: { $ne: null },
+        })
+            .select(
+                "-password"
+            )
+            .populate("role", "name")
+            .populate("company", "companyName")
+            .lean();
+
+        if (!employee) {
+            return res.status(404).json({
+                message: "Employee not found",
+            });
+        }
+
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+        if (employee.employeeProfile?.profileImage?.fileUrl) {
+            employee.employeeProfile.profileImage.fileUrl =
+                baseUrl + employee.employeeProfile.profileImage.fileUrl;
+        }
+
+        if (employee.employeeProfile?.documents?.idImages?.length) {
+            employee.employeeProfile.documents.idImages =
+                employee.employeeProfile.documents.idImages.map((doc) => ({
+                    ...doc,
+                    fileUrl: baseUrl + doc.fileUrl,
+                }));
+        }
+
+        if (employee.employeeProfile?.documents?.aadhaarImages?.length) {
+            employee.employeeProfile.documents.aadhaarImages =
+                employee.employeeProfile.documents.aadhaarImages.map((doc) => ({
+                    ...doc,
+                    fileUrl: baseUrl + doc.fileUrl,
+                }));
+        }
+
+        return res.status(200).json({
+            message: "Employee fetched successfully",
+            data: employee,
+        });
+    } catch (error) {
+        console.error("Get employee by id error:", error);
+        return res.status(500).json({
+            message: "Failed to fetch employee",
+        });
+    }
+};
 
 
 exports.updateEmployee = async (req, res) => {
     try {
         const { employeeId } = req.params;
-        console.log("employee", req.files);
+        if (!mongoose.Types.ObjectId.isValid(employeeId)) {
+            return res.status(400).json({ message: "Invalid employee id" });
+        }
+
+        const employee = await User.findOne({
+            _id: employeeId,
+            company: req.user.company,
+            isDeleted: false,
+            employeeProfile: { $ne: null },
+        });
+
+        if (!employee) {
+            return res.status(404).json({ message: "Employee not found" });
+        }
+        const company = await Company.findOne({
+            _id: req.user.company,
+            isDeleted: false
+        })
+
+        const companyName = company.companyName
+        let passwordChanged = false;
+        let newPlainPassword = null;
+
+        if (req.body.password) {
+            newPlainPassword = req.body.password;
+            employee.password = newPlainPassword;
+            passwordChanged = true;
+        }
+
+        if (req.body.email && req.body.email !== employee.email) {
+            const emailExists = await User.findOne({
+                email: req.body.email.toLowerCase(),
+                _id: { $ne: employeeId },
+                isDeleted: false,
+            });
+            if (emailExists) {
+                return res
+                    .status(409)
+                    .json({ message: "Email already in use" });
+            }
+            employee.email = req.body.email.toLowerCase();
+        }
+
+        if (req.body.phone && req.body.phone !== employee.phone) {
+            const phoneExists = await User.findOne({
+                phone: req.body.phone,
+                _id: { $ne: employeeId },
+                isDeleted: false,
+            });
+            if (phoneExists) {
+                return res
+                    .status(409)
+                    .json({ message: "Phone number already in use" });
+            }
+            employee.phone = req.body.phone;
+        }
+
+        ["firstName", "lastName", "gender"].forEach((field) => {
+            if (req.body[field] !== undefined) {
+                employee[field] = req.body[field];
+            }
+        });
+
+        let childrens;
+
+        if (req.body.childrens !== undefined) {
+            try {
+                childrens = JSON.parse(req.body.childrens);
+
+                if (!Array.isArray(childrens)) {
+                    return res.status(400).json({
+                        message: "childrens must be an array",
+                    });
+                }
+                childrens.forEach((child, index) => {
+                    if (!child.name || !child.gender || !child.dateOfBirth) {
+                        throw new Error(`Invalid children data at index ${index}`);
+                    }
+                });
+            } catch (err) {
+                return res.status(400).json({
+                    message: "Invalid childrens format",
+                });
+            }
+        }
+
+        const profileFields = [
+            "jobPosition",
+            "startDate",
+            "workHoursAndAvailability",
+            "professionalQualifications",
+            "workExperience",
+            "languageSkills",
+            "specialSkills",
+            "assignmentAreas",
+            "medicalInformation",
+            "emergencyContacts",
+            "socialSecurityNumber",
+            "taxInformation",
+            "dateOfBirth",
+            "privateAddress",
+            "privatePhoneNumber",
+            "ahvNumber",
+            "bonusAndBenefits",
+            "employmentContract",
+            "contractChanges",
+            "notice",
+            "performanceEvaluations",
+            "disciplinary",
+            "futureDevelopmentPlans",
+            "access",
+            "security",
+        ];
+
+        profileFields.forEach((field) => {
+            if (req.body[field] !== undefined) {
+                employee.employeeProfile[field] = req.body[field];
+            }
+        });
+        if (childrens !== undefined) {
+            employee.employeeProfile.childrens = childrens;
+        }
+
+        if (req.body.bankAccountInformation) {
+            employee.employeeProfile.bankAccountInformation = {
+                ...employee.employeeProfile.bankAccountInformation,
+                ...req.body.bankAccountInformation,
+            };
+        }
+        // 🔥 NEW PAYMENT UPDATE
+        if (
+            req.body.paymentType !== undefined ||
+            req.body.hourlyRate !== undefined ||
+            req.body.perServiceRate !== undefined ||
+            req.body.fixedSalary !== undefined
+        ) {
+            if (!employee.employeeProfile.employeePayment) {
+                employee.employeeProfile.employeePayment = {};
+            }
+
+            if (req.body.paymentType !== undefined) {
+                employee.employeeProfile.employeePayment.type = req.body.paymentType;
+            }
+
+            if (req.body.hourlyRate !== undefined) {
+                employee.employeeProfile.employeePayment.hourlyRate = Number(req.body.hourlyRate) || 0;
+            }
+
+            if (req.body.perServiceRate !== undefined) {
+                employee.employeeProfile.employeePayment.perServiceRate = Number(req.body.perServiceRate) || 0;
+            }
+
+            if (req.body.fixedSalary !== undefined) {
+                employee.employeeProfile.employeePayment.fixedSalary = Number(req.body.fixedSalary) || 0;
+            }
+        }
+        const profileImageFile = req.files?.profileImage?.[0];
+        const idImageFiles = req.files?.idImages;
+        const aadhaarImageFiles = req.files?.aadhaarImages;
+
+        if (profileImageFile) {
+            if (employee.employeeProfile.profileImage?.fileUrl) {
+                fs.unlink(
+                    path.join(
+                        process.cwd(),
+                        employee.employeeProfile.profileImage.fileUrl
+                    ),
+                    () => { }
+                );
+            }
+
+            employee.employeeProfile.profileImage = {
+                fileName: profileImageFile.originalname,
+                fileUrl: `/uploads/profile-images/${profileImageFile.filename}`,
+            };
+        }
+
+        if (idImageFiles) {
+            employee.employeeProfile.documents.idImages.forEach((doc) => {
+                fs.unlink(
+                    path.join(process.cwd(), doc.fileUrl),
+                    () => { }
+                );
+            });
+
+            employee.employeeProfile.documents.idImages = idImageFiles.map(
+                (file) => ({
+                    fileName: file.originalname,
+                    fileUrl: `/uploads/id-images/${file.filename}`,
+                })
+            );
+        }
+
+        if (aadhaarImageFiles) {
+            employee.employeeProfile.documents.aadhaarImages.forEach((doc) => {
+                fs.unlink(
+                    path.join(process.cwd(), doc.fileUrl),
+                    () => { }
+                );
+            });
+
+            employee.employeeProfile.documents.aadhaarImages =
+                aadhaarImageFiles.map((file) => ({
+                    fileName: file.originalname,
+                    fileUrl: `/uploads/aadhaar-images/${file.filename}`,
+                }));
+        }
+
+        await employee.save();
+
+        if (passwordChanged) {
+            try {
+                const mail = passwordUpdatedTemplate({
+                    fullName: `${employee.firstName} ${employee.lastName}`,
+                    email: employee.email,
+                    password: newPlainPassword,
+                    companyName,
+                });
+
+                await sendSimpleMail({
+                    to: employee.email,
+                    subject: mail.subject,
+                    html: mail.html,
+                    text: mail.text,
+                });
+            } catch (mailError) {
+                console.error("Password email failed:", mailError);
+            }
+        }
+
+        const result = employee.toObject();
+        delete result.password;
+
+        return res.status(200).json({
+            message: passwordChanged
+                ? "Employee updated and password email sent"
+                : "Employee updated successfully",
+            data: result,
+        });
+    } catch (error) {
+        console.error("Update employee error:", error);
+
+        if (req.files) {
+            const files = [
+                ...(req.files.profileImage || []),
+                ...(req.files.idImages || []),
+                ...(req.files.aadhaarImages || []),
+            ];
+
+            files.forEach((file) => {
+                fs.unlink(path.join(file.destination, file.filename), () => { });
+            });
+        }
+
+        return res.status(500).json({
+            message: "Failed to update employee",
+        });
+    }
+};
+
+exports.updateEmployeeProfile = async (req, res) => {
+    try {
+        const employeeId = req.user._id;
         if (!mongoose.Types.ObjectId.isValid(employeeId)) {
             return res.status(400).json({ message: "Invalid employee id" });
         }
@@ -681,7 +1015,7 @@ exports.toggleEmployeeDeleteByCompanyAdmin = async (req, res) => {
             });
         }
 
-    
+
         const plan = await Plan.findById(company.planId);
 
         if (!plan) {
@@ -731,3 +1065,396 @@ exports.toggleEmployeeDeleteByCompanyAdmin = async (req, res) => {
     }
 };
 
+exports.getEmployeeFinancial = async (req, res) => {
+    try {
+        const employeeId = req.user._id;
+
+        const startOfMonth = new Date(
+            new Date().getFullYear(),
+            new Date().getMonth(),
+            1
+        );
+
+        // ================= TOTAL EARNINGS =================
+        const totalEarningsAgg = await SubTask.aggregate([
+            {
+                $match: {
+                    assignedTo: employeeId,
+                    status: "completed",
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$subtaskPrice" },
+                },
+            },
+        ]);
+
+        const totalEarnings = totalEarningsAgg[0]?.total || 0;
+
+        // ================= COMPLETED TASKS =================
+        const completedTasks = await SubTask.countDocuments({
+            assignedTo: employeeId,
+            status: "completed",
+        });
+
+        // ================= PENDING AMOUNT =================
+        const pendingAgg = await SubTask.aggregate([
+            {
+                $match: {
+                    assignedTo: employeeId,
+                    status: { $in: ["pending", "in_progress"] },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$subtaskPrice" },
+                },
+            },
+        ]);
+
+        const pendingAmount = pendingAgg[0]?.total || 0;
+
+        // ================= THIS MONTH =================
+        const monthlyAgg = await SubTask.aggregate([
+            {
+                $match: {
+                    assignedTo: employeeId,
+                    status: "completed",
+                    updatedAt: { $gte: startOfMonth },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$subtaskPrice" },
+                },
+            },
+        ]);
+
+        const thisMonthEarnings = monthlyAgg[0]?.total || 0;
+
+        // ================= RECENT TRANSACTIONS =================
+        const recentTransactions = await SubTask.find({
+            assignedTo: employeeId,
+        })
+            .sort({ updatedAt: -1 })
+            .limit(5)
+            .select(
+                "subTaskName subtaskPrice status updatedAt"
+            );
+
+        // ================= MONTHLY EARNINGS GRAPH =================
+        const monthlyGraph = await SubTask.aggregate([
+            {
+                $match: {
+                    assignedTo: employeeId,
+                    status: "completed",
+                },
+            },
+            {
+                $group: {
+                    _id: { $month: "$updatedAt" },
+                    total: { $sum: "$subtaskPrice" },
+                },
+            },
+            {
+                $sort: { "_id": 1 },
+            },
+        ]);
+
+        // ================= TASK STATUS COUNT =================
+        const statusAgg = await SubTask.aggregate([
+            {
+                $match: {
+                    assignedTo: employeeId,
+                },
+            },
+            {
+                $group: {
+                    _id: "$status",
+                    count: { $sum: 1 },
+                },
+            },
+        ]);
+
+        let completed = 0,
+            inProgress = 0,
+            failed = 0;
+
+        statusAgg.forEach((s) => {
+            if (s._id === "completed") completed = s.count;
+            if (s._id === "in_progress") inProgress = s.count;
+            if (s._id === "pending") failed = s.count;
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                cards: {
+                    totalEarnings,
+                    completedTasks,
+                    pendingAmount,
+                    thisMonthEarnings,
+                },
+
+                recentTransactions,
+
+                monthlyEarnings: monthlyGraph,
+
+                taskStats: {
+                    completed,
+                    inProgress,
+                    pending: failed,
+                },
+            },
+        });
+
+    } catch (error) {
+        console.error("Dashboard error:", error);
+        return res.status(500).json({
+            message: "Failed to load dashboard",
+        });
+    }
+};
+
+
+exports.getEmployeeDashboard = async (req, res) => {
+  try {
+    const employeeId = new mongoose.Types.ObjectId(req.user._id);
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const startOfMonth = new Date(
+      todayStart.getFullYear(),
+      todayStart.getMonth(),
+      1
+    );
+
+    const startOfWeek = new Date();
+    startOfWeek.setDate(startOfWeek.getDate() - 7);
+
+    // ================= TASK CARDS =================
+
+    const totalAssigned = await SubTask.countDocuments({
+      assignedTo: employeeId,
+    });
+
+    const activeTasks = await SubTask.countDocuments({
+      assignedTo: employeeId,
+      status: "in_progress",
+    });
+
+    const completedTasks = await SubTask.countDocuments({
+      assignedTo: employeeId,
+      status: "completed",
+    });
+
+    // ================= ✅ EARNINGS (FIXED) =================
+
+    const totalEarningsAgg = await EmployeePayment.aggregate([
+      {
+        $match: { employee: employeeId },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+        },
+      },
+    ]);
+
+    const totalEarnings = totalEarningsAgg[0]?.total || 0;
+
+    // ================= TODAY TASKS =================
+
+    const todayTasks = await SubTask.find({
+      assignedTo: employeeId,
+      createdAt: { $gte: todayStart, $lte: todayEnd },
+    })
+      .select(
+        "subTaskName subtaskPrice status estimatedDurationSeconds createdAt"
+      )
+      .sort({ createdAt: 1 });
+
+    // ================= FINANCIAL =================
+
+    const weeklyIncomeAgg = await EmployeePayment.aggregate([
+      {
+        $match: {
+          employee: employeeId,
+          createdAt: { $gte: startOfWeek },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+        },
+      },
+    ]);
+
+    const weeklyIncome = weeklyIncomeAgg[0]?.total || 0;
+
+    const monthlyIncomeAgg = await EmployeePayment.aggregate([
+      {
+        $match: {
+          employee: employeeId,
+          createdAt: { $gte: startOfMonth },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+        },
+      },
+    ]);
+
+    const monthlyIncome = monthlyIncomeAgg[0]?.total || 0;
+
+    const monthlyTarget = 5000;
+
+    const progress =
+      monthlyTarget > 0
+        ? Math.min((monthlyIncome / monthlyTarget) * 100, 100)
+        : 0;
+
+    // ================= PERFORMANCE =================
+
+    const totalTasks = totalAssigned || 1;
+
+    const completionRate = Math.round(
+      (completedTasks / totalTasks) * 100
+    );
+
+    const onTimeAgg = await SubTask.aggregate([
+      {
+        $match: {
+          assignedTo: employeeId,
+          status: "completed",
+          expectedEndTime: { $ne: null },
+        },
+      },
+      {
+        $project: {
+          onTime: {
+            $cond: [
+              { $lte: ["$timerCompletedAt", "$expectedEndTime"] },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          onTimeCount: { $sum: "$onTime" },
+        },
+      },
+    ]);
+
+    const onTimeDelivery =
+      onTimeAgg[0]?.total > 0
+        ? Math.round(
+            (onTimeAgg[0].onTimeCount / onTimeAgg[0].total) * 100
+          )
+        : 0;
+
+    const qualityScore = 90;
+
+    // ================= MONTHLY GRAPH (FIXED) =================
+
+    const monthlyGraph = await EmployeePayment.aggregate([
+      {
+        $match: { employee: employeeId },
+      },
+      {
+        $group: {
+          _id: { $month: "$createdAt" },
+          total: { $sum: "$amount" },
+        },
+      },
+      { $sort: { "_id": 1 } },
+    ]);
+
+    // ================= WEEKLY GRAPH =================
+
+    const weeklyGraph = await EmployeePayment.aggregate([
+      {
+        $match: {
+          employee: employeeId,
+          createdAt: { $gte: startOfWeek },
+        },
+      },
+      {
+        $group: {
+          _id: { $dayOfWeek: "$createdAt" },
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { "_id": 1 } },
+    ]);
+
+    // ================= RECENT ACTIVITY =================
+
+    const recentActivity = await SubTask.find({
+      assignedTo: employeeId,
+    })
+      .sort({ updatedAt: -1 })
+      .limit(5)
+      .select("subTaskName status updatedAt");
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        cards: {
+          totalAssigned,
+          activeTasks,
+          completedTasks,
+          totalEarnings,
+        },
+
+        todayTasks,
+
+        financial: {
+          earningsPerTask:
+            completedTasks > 0
+              ? Math.round(totalEarnings / completedTasks)
+              : 0,
+          weeklyIncome,
+          monthlyTarget,
+          progress: Math.round(progress),
+        },
+
+        performance: {
+          completionRate,
+          qualityScore,
+          onTimeDelivery,
+        },
+
+        charts: {
+          monthlyIncome: monthlyGraph,
+          weeklyStats: weeklyGraph,
+        },
+
+        recentActivity,
+      },
+    });
+
+  } catch (error) {
+    console.error("Dashboard error:", error);
+    return res.status(500).json({
+      message: "Failed to load dashboard",
+    });
+  }
+};

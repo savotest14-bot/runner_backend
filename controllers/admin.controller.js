@@ -301,6 +301,45 @@ exports.getAllCompanies = async (req, res) => {
   }
 };
 
+exports.searchCompanies = async (req, res) => {
+  try {
+    const search = req.query.search?.trim() || "";
+
+    const matchStage = {
+      isDeleted: false,
+      ...(search && {
+        companyName: { $regex: search, $options: "i" },
+      }),
+    };
+
+    const companies = await Company.aggregate([
+      { $match: matchStage },
+
+      {
+        $project: {
+          _id: 0,
+          companyId: "$_id",
+          companyName: 1,
+        },
+      },
+
+      { $sort: { companyName: 1 } }, // optional: alphabetical order
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      count: companies.length,
+      data: companies,
+    });
+  } catch (error) {
+    console.error("Search companies error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch companies",
+    });
+  }
+};
+
 exports.getPendingSubscriptionCompanies = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -389,7 +428,7 @@ exports.getPendingSubscriptionCompanies = async (req, res) => {
               { $ifNull: ["$companyAdmin.lastName", ""] },
             ],
           },
-      
+
         },
       },
 
@@ -448,6 +487,7 @@ exports.getActiveSubscriptionCompanies = async (req, res) => {
 
     const pipeline = [
       { $match: matchStage },
+
       {
         $lookup: {
           from: "users",
@@ -463,7 +503,7 @@ exports.getActiveSubscriptionCompanies = async (req, res) => {
                 },
               },
             },
-
+            { $limit: 1 }, // ✅ prevent duplicates
             {
               $project: {
                 firstName: 1,
@@ -477,9 +517,8 @@ exports.getActiveSubscriptionCompanies = async (req, res) => {
       },
 
       {
-        $unwind: {
-          path: "$companyAdmin",
-          preserveNullAndEmptyArrays: true,
+        $addFields: {
+          companyAdmin: { $arrayElemAt: ["$companyAdmin", 0] },
         },
       },
 
@@ -499,7 +538,7 @@ exports.getActiveSubscriptionCompanies = async (req, res) => {
           subscriptionStatus: 1,
           address: 1,
 
-           adminFirstName: "$companyAdmin.firstName",
+          adminFirstName: "$companyAdmin.firstName",
           adminLastName: "$companyAdmin.lastName",
           adminEmail: "$companyAdmin.email",
 
@@ -1764,12 +1803,12 @@ exports.getAllTasksForSuperAdmin = async (req, res) => {
               { taskName: { $regex: search, $options: "i" } },
               { taskCategory: { $regex: search, $options: "i" } },
               { taskSubCategory: { $regex: search, $options: "i" } },
-              { description: { $regex: search, $options: "i" } },
             ],
           }),
         },
       },
 
+      // ✅ COMPANY
       {
         $lookup: {
           from: "companies",
@@ -1780,6 +1819,7 @@ exports.getAllTasksForSuperAdmin = async (req, res) => {
       },
       { $unwind: "$company" },
 
+      // ✅ ASSIGNED BY
       {
         $lookup: {
           from: "users",
@@ -1795,12 +1835,23 @@ exports.getAllTasksForSuperAdmin = async (req, res) => {
         },
       },
 
+      // ✅ SUBTASKS JOIN (NEW)
+      {
+        $lookup: {
+          from: "subtasks",
+          localField: "subTasks",
+          foreignField: "_id",
+          as: "subTasks",
+        },
+      },
+
+      // ✅ USERS FROM SUBTASKS
       {
         $lookup: {
           from: "users",
-          localField: "assignedTo",
+          localField: "subTasks.assignedTo",
           foreignField: "_id",
-          as: "assignedToUsers",
+          as: "assignedUsers",
         },
       },
 
@@ -1819,10 +1870,7 @@ exports.getAllTasksForSuperAdmin = async (req, res) => {
                 taskName: 1,
                 taskCategory: 1,
                 taskSubCategory: 1,
-                taskTime: 1,
                 taskPrice: 1,
-                description: 1,
-                dueDate: 1,
                 status: 1,
                 createdAt: 1,
 
@@ -1843,22 +1891,34 @@ exports.getAllTasksForSuperAdmin = async (req, res) => {
                   email: "$assignedBy.email",
                 },
 
-                assignedTo: {
+                // ✅ SUBTASKS WITH USERS
+                subTasks: {
                   $map: {
-                    input: "$assignedToUsers",
-                    as: "user",
+                    input: "$subTasks",
+                    as: "sub",
                     in: {
-                      userId: "$$user._id",
-                      name: {
-                        $concat: ["$$user.firstName", " ", "$$user.lastName"],
+                      subTaskId: "$$sub._id",
+                      subTaskName: "$$sub.subTaskName",
+                      status: "$$sub.status",
+                      estimatedDurationSeconds:
+                        "$$sub.estimatedDurationSeconds",
+
+                      assignedTo: {
+                        $filter: {
+                          input: "$assignedUsers",
+                          as: "user",
+                          cond: {
+                            $in: ["$$user._id", "$$sub.assignedTo"],
+                          },
+                        },
                       },
-                      email: "$$user.email",
                     },
                   },
                 },
               },
             },
           ],
+
           totalCount: [{ $count: "total" }],
         },
       },
@@ -1889,18 +1949,16 @@ exports.getAllTasksForSuperAdmin = async (req, res) => {
 
 exports.getTaskByIdForSuperAdmin = async (req, res) => {
   try {
-    if (req.user.role.name !== "superAdmin") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
     const { id } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid task id" });
     }
 
+    const employeeId = new mongoose.Types.ObjectId(req.user._id);
+    const userRole = req.user.role.name;
+
     const pipeline = [
-      // 🔹 Match Task
       {
         $match: {
           _id: new mongoose.Types.ObjectId(id),
@@ -1908,7 +1966,7 @@ exports.getTaskByIdForSuperAdmin = async (req, res) => {
         },
       },
 
-      // 🔹 Company lookup
+      // ✅ Company
       {
         $lookup: {
           from: "companies",
@@ -1917,9 +1975,9 @@ exports.getTaskByIdForSuperAdmin = async (req, res) => {
           as: "company",
         },
       },
-      { $unwind: "$company" },
+      { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
 
-      // 🔹 Assigned By lookup
+      // ✅ Assigned By
       {
         $lookup: {
           from: "users",
@@ -1928,24 +1986,73 @@ exports.getTaskByIdForSuperAdmin = async (req, res) => {
           as: "assignedBy",
         },
       },
+      { $unwind: { path: "$assignedBy", preserveNullAndEmptyArrays: true } },
+
+      // ✅ SubTasks
       {
-        $unwind: {
-          path: "$assignedBy",
-          preserveNullAndEmptyArrays: true,
+        $lookup: {
+          from: "subtasks",
+          localField: "subTasks",
+          foreignField: "_id",
+          as: "subTasks",
         },
       },
 
-      // 🔹 Assigned To lookup
+      // ✅ Sort SubTasks
+      {
+        $addFields: {
+          subTasks: {
+            $sortArray: {
+              input: "$subTasks",
+              sortBy: { createdAt: -1 },
+            },
+          },
+        },
+      },
+
+      // ✅ Role-based filtering
+      {
+        $addFields: {
+          subTasks: {
+            $cond: {
+              if: { $eq: [userRole, "employee"] },
+              then: {
+                $filter: {
+                  input: "$subTasks",
+                  as: "sub",
+                  cond: {
+                    $in: [employeeId, "$$sub.assignedTo"],
+                  },
+                },
+              },
+              else: "$subTasks",
+            },
+          },
+        },
+      },
+
+      // ✅ Hide task if no subtask for employee
+      ...(userRole === "employee"
+        ? [
+          {
+            $match: {
+              $expr: { $gt: [{ $size: "$subTasks" }, 0] },
+            },
+          },
+        ]
+        : []),
+
+      // ✅ Assigned Users
       {
         $lookup: {
           from: "users",
-          localField: "assignedTo",
+          localField: "subTasks.assignedTo",
           foreignField: "_id",
-          as: "assignedToUsers",
+          as: "assignedUsers",
         },
       },
 
-      // 🔹 Contract lookup (REVERSE)
+      // ✅ Contract
       {
         $lookup: {
           from: "contracts",
@@ -1956,71 +2063,142 @@ exports.getTaskByIdForSuperAdmin = async (req, res) => {
                 $expr: {
                   $and: [
                     { $in: ["$$taskId", "$tasks"] },
-                    { $eq: ["$isDeleted", false] }
-                  ]
-                }
-              }
+                    { $eq: ["$isDeleted", false] },
+                  ],
+                },
+              },
             },
-            {
-              $project: {
-                _id: 1,
-                contractNumber: 1
-              }
-            }
           ],
-          as: "contract"
-        }
-      },
-      {
-        $unwind: {
-          path: "$contract",
-          preserveNullAndEmptyArrays: true,
+          as: "contract",
         },
       },
+      { $unwind: { path: "$contract", preserveNullAndEmptyArrays: true } },
 
-      // 🔹 Final Projection
+      // ✅ Property (via contract)
+      {
+        $lookup: {
+          from: "properties",
+          localField: "contract.property",
+          foreignField: "_id",
+          as: "property",
+        },
+      },
+      { $unwind: { path: "$property", preserveNullAndEmptyArrays: true } },
+
+      // ✅ Client (via property)
+      {
+        $lookup: {
+          from: "clients",
+          localField: "property.client",
+          foreignField: "_id",
+          as: "client",
+        },
+      },
+      { $unwind: { path: "$client", preserveNullAndEmptyArrays: true } },
+
+      // ✅ FINAL RESPONSE
       {
         $project: {
           _id: 0,
           taskId: "$_id",
 
-          taskName: 1,
-          taskCategory: 1,
-          taskSubCategory: 1,
-          taskDuration: 1,
-          taskDurationUnit: 1,
-          taskPrice: 1,
-          status: 1,
-          createdAt: 1,
+          // ✅ Task Details
+          taskDetails: {
+            taskId: "$_id",
+            taskName: "$taskName",
+            taskCategory: "$taskCategory",
+            taskSubCategory: "$taskSubCategory",
+            taskPrice: "$taskPrice",
+            taskDescription: "$taskDescription",
+            status: "$status",
+            createdAt: "$createdAt",
+            updatedAt: "$updatedAt",
+          },
 
+          // ✅ Company
           company: {
             companyId: "$company._id",
             companyName: "$company.companyName",
           },
 
+          // ✅ Contract
           contract: {
             contractId: "$contract._id",
             contractNumber: "$contract.contractNumber",
           },
 
+          // ✅ Property
+          property: {
+            propertyId: "$property._id",
+            propertyName: "$property.propertyName",
+            propertyType: "$property.propertyType",
+            address: "$property.location.address",
+            coordinates: "$property.location.coordinates",
+          },
+
+          // ✅ Client
+          client: {
+            clientId: "$client._id",
+            name: {
+              $concat: [
+                { $ifNull: ["$client.firstName", ""] },
+                " ",
+                { $ifNull: ["$client.lastName", ""] },
+              ],
+            },
+            email: "$client.email",
+            contactNo: "$client.phoneNumber", // ⚠️ adjust if needed
+          },
+
+          // ✅ Assigned By
           assignedBy: {
             userId: "$assignedBy._id",
             name: {
-              $concat: ["$assignedBy.firstName", " ", "$assignedBy.lastName"],
+              $concat: [
+                { $ifNull: ["$assignedBy.firstName", ""] },
+                " ",
+                { $ifNull: ["$assignedBy.lastName", ""] },
+              ],
             },
             email: "$assignedBy.email",
           },
 
-          assignedTo: {
+          // ✅ Full SubTask Details
+          subTasks: {
             $map: {
-              input: "$assignedToUsers",
-              as: "user",
+              input: "$subTasks",
+              as: "sub",
               in: {
-                userId: "$$user._id",
-                name: {
-                  $concat: ["$$user.firstName", " ", "$$user.lastName"],
-                },
-                email: "$$user.email",
+                $mergeObjects: [
+                  "$$sub",
+                  {
+                    assignedTo: {
+                      $map: {
+                        input: {
+                          $filter: {
+                            input: "$assignedUsers",
+                            as: "user",
+                            cond: {
+                              $in: ["$$user._id", "$$sub.assignedTo"],
+                            },
+                          },
+                        },
+                        as: "user",
+                        in: {
+                          userId: "$$user._id",
+                          name: {
+                            $concat: [
+                              "$$user.firstName",
+                              " ",
+                              "$$user.lastName",
+                            ],
+                          },
+                          email: "$$user.email",
+                        },
+                      },
+                    },
+                  },
+                ],
               },
             },
           },
@@ -2038,6 +2216,7 @@ exports.getTaskByIdForSuperAdmin = async (req, res) => {
       success: true,
       data: task[0],
     });
+
   } catch (error) {
     console.error("Get task by id error:", error);
     return res.status(500).json({
@@ -2261,6 +2440,7 @@ exports.getAllPropertiesForSuperAdmin = async (req, res) => {
                 propertyType: 1,
                 description: 1,
                 sizeSqm: 1,
+                location: 1,
                 noOfResidents: 1,
                 specialFeatureEndDate: 1,
                 createdAt: 1,
@@ -2504,6 +2684,7 @@ exports.createRunnerEmployee = async (req, res) => {
     });
   }
 };
+
 
 exports.getAllRunnerEmployees = async (req, res) => {
   try {

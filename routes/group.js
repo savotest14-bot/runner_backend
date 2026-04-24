@@ -3,11 +3,15 @@ const router = express.Router();
 const authenticate = require("../middlewares/authenticate");
 const authorize = require("../middlewares/authorize");
 
-const { getEligibleUsersForGroup, getAvailableContracts, createGroup, getAllGroups, getGroupDetails, updateGroup, deleteGroup, changeGroupAdmin, getMyGroups, getGroupFullDetails } = require("../controllers/group");
+const { getEligibleUsersForGroup, getAvailableContracts, createGroup, getAllGroups, getGroupDetails, updateGroup, deleteGroup, changeGroupAdmin, getMyGroups, getGroupFullDetails, getAvailableTasks, suggestMembers, addGroupMember, removeGroupMember, getGroupAdminDashboard, getGroupMembersForAssign, reviewWorkReport } = require("../controllers/group");
 
 router.get("/eligible-users", authenticate, authorize("view_group"), getEligibleUsersForGroup);
 
 router.get("/getAvailableContracts", authenticate, authorize("view_group"), getAvailableContracts);
+
+router.get("/getAvailableTasks", authenticate, authorize("view_group"), getAvailableTasks)
+
+router.get("/suggestMembers", authenticate, authorize("view_group"), suggestMembers)
 
 router.post("/createGroup", authenticate, authorize("create_group"), createGroup);
 
@@ -21,7 +25,18 @@ router.delete("/deleteGroup/:groupId", authenticate, authorize("delete_group"), 
 
 router.patch("/changeGroupAdmin/:groupId", authenticate, authorize("update_group"), changeGroupAdmin);
 
-router.get("/getMyGroups", authenticate, authorize("view_group"), getMyGroups);
+router.patch("/addGroupMember/:groupId", authenticate, addGroupMember);
 
-router.get("/getGroupFullDetails/:groupId", authenticate, authorize("view_group"), getGroupFullDetails);
+router.patch("/removeGroupMember/:groupId", authenticate, removeGroupMember)
+
+router.get("/getMyGroups", authenticate, getMyGroups);
+
+router.get("/getGroupFullDetails/:groupId", authenticate, getGroupFullDetails);
+
+router.get("/getGroupAdminDashboard", authenticate, getGroupAdminDashboard);
+
+router.get("/getGroupMembersForAssign/:groupId", authenticate, getGroupMembersForAssign);
+
+router.patch("/reviewWorkReport/:reportId", authenticate, reviewWorkReport);
+
 module.exports = router;

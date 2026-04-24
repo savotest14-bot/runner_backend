@@ -48,7 +48,28 @@ const employeeProfileSchema = new mongoose.Schema(
 
     ahvNumber: String,
 
-    salaryAndWageDetails: String,
+    employeePayment: {
+      type: {
+        type: String,
+        enum: ["fixed", "hourly", "per_service"],
+        default: "fixed"
+      },
+
+      hourlyRate: {
+        type: Number,
+        default: 0
+      },
+
+      perServiceRate: {
+        type: Number,
+        default: 0
+      },
+
+      fixedSalary: {
+        type: Number,
+        default: 0
+      }
+    },
 
     bankAccountInformation: {
       type: bankAccountSchema,
@@ -169,6 +190,7 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+userSchema.index({ company: 1, role: 1 });
 
 userSchema.pre("save", async function () {
   if (!this.isModified("password")) return;

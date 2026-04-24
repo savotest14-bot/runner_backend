@@ -13,9 +13,9 @@ const authorize = (permission) => {
     const userPermissions = (req.user.role.permissions || []).map(p =>
       String(p).trim().toLowerCase()
     );
-
+    // console.log("userPermissions",userPermissions)
     const requiredPermission = String(permission).trim().toLowerCase();
-
+    // console.log("requiredPermission",requiredPermission)
     if (!userPermissions.includes(requiredPermission)) {
       return res.status(403).json({
         message: "You do not have permission to access this route",

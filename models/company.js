@@ -30,11 +30,6 @@ const companySchema = new mongoose.Schema(
       index: true,
     },
 
-    phoneCode: {
-      type: String,
-      default: "+91",
-    },
-
     phoneNumber: {
       type: String,
       trim: true,

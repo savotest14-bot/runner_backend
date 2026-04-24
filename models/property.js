@@ -22,6 +22,19 @@ const propertySchema = new mongoose.Schema(
       ref: "Client",
       required: true,
     },
+    // ✅ ADD THIS
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        required: true,
+      },
+      address: String, // optional
+    },
 
     isDeleted: {
       type: Boolean,
@@ -30,5 +43,5 @@ const propertySchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
-
+propertySchema.index({ location: "2dsphere" });
 module.exports = mongoose.model("Property", propertySchema);

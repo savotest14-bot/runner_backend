@@ -185,6 +185,9 @@ exports.softDeletePlan = async (req, res) => {
 };
 
 
+
+
+
 exports.getAllPlans = async (req, res) => {
   try {
     const role = req.user?.role?.name;
@@ -198,6 +201,7 @@ exports.getAllPlans = async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
     const search = req.query.search?.trim();
+    const status = req.query.status?.trim(); // ✅ NEW
 
     const skip = (page - 1) * limit;
 
@@ -205,12 +209,19 @@ exports.getAllPlans = async (req, res) => {
       isDeleted: false,
     };
 
+    // Role based filter
     if (role === "company_admin") {
       filter.planStatus = "active";
     }
 
+    // Search filter
     if (search) {
       filter.planName = { $regex: search, $options: "i" };
+    }
+
+    // ✅ Status filter from query (?status=active)
+    if (status) {
+      filter.planStatus = status;
     }
 
     const [plans, total] = await Promise.all([
@@ -240,7 +251,6 @@ exports.getAllPlans = async (req, res) => {
     });
   }
 };
-
 
 
 exports.purchasePlan = async (req, res) => {

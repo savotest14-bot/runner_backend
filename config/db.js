@@ -68,7 +68,7 @@ const connectDBAndSeed = async () => {
             PERMISSIONS.CREATE_USER,
             PERMISSIONS.UPDATE_USER,
             PERMISSIONS.VIEW_USER,
-
+            PERMISSIONS.VIEW_TASKS,
             PERMISSIONS.VIEW_GROUP,
           ],
         },
@@ -87,6 +87,7 @@ const connectDBAndSeed = async () => {
           permissions: [
             PERMISSIONS.VIEW_SELF,
             PERMISSIONS.UPDATE_SELF,
+            PERMISSIONS.VIEW_TASKS,
           ],
         },
         {
