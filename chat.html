@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Final Chat UI</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+
+<body style="font-family: Arial;">
+
+    <h3>🔥 Chat App</h3>
+
+    <input id="token" placeholder="JWT Token" style="width:400px">
+    <button onclick="init()">Start</button>
+
+    <hr>
+
+    <div style="display:flex; height:500px;">
+
+        <!-- CHAT LIST -->
+        <div id="chatList" style="width:30%; border-right:1px solid #000; overflow:auto;"></div>
+
+        <!-- CHAT -->
+        <div style="width:70%; padding:10px;">
+            <div id="chatHeader"></div>
+
+            <div id="messages" style="height:350px; overflow:auto; border:1px solid #000;"></div>
+
+            <input id="messageInput" placeholder="Type message..." style="width:80%;">
+        </div>
+
+    </div>
+
+    <script>
+        let socket;
+        let currentChatId = null;
+        let currentUserId = null;
+        let typingTimeout;
+        let typingEmitTimeout;
+
+        /* ================= INIT ================= */
+        async function init() {
+            const token = document.getElementById("token").value;
+
+            currentUserId = JSON.parse(atob(token.split('.')[1])).id;
+
+            socket = io("http://localhost:5000", {
+                auth: { token }
+            });
+
+            setupSocket();
+            loadChats(token);
+        }
+
+        /* ================= LOAD CHAT LIST ================= */
+        async function loadChats(token) {
+            const res = await fetch("http://localhost:5000/api/chat/getChatList", {
+                headers: { Authorization: "Bearer " + token }
+            });
+
+            const data = await res.json();
+
+            const container = document.getElementById("chatList");
+            container.innerHTML = "";
+
+            data.data.forEach(chat => {
+                const div = document.createElement("div");
+
+                div.style.padding = "10px";
+                div.style.cursor = "pointer";
+
+                div.innerHTML = `
+            <b>${chat.chatName}</b>
+            <span style="float:right;color:red">${chat.unreadCount}</span>
+        `;
+
+                div.onclick = () => openChat(chat._id, chat.chatName);
+
+                container.appendChild(div);
+            });
+        }
+
+        /* ================= OPEN CHAT ================= */
+        async function openChat(chatId, name) {
+            currentChatId = chatId;
+
+            document.getElementById("chatHeader").innerText = name;
+
+            socket.emit("join_chat", { chatId });
+
+            const token = document.getElementById("token").value;
+
+            const res = await fetch(`http://localhost:5000/api/chat/getMessages/${chatId}`, {
+                headers: { Authorization: "Bearer " + token }
+            });
+
+            const data = await res.json();
+
+            const container = document.getElementById("messages");
+            container.innerHTML = "";
+
+            data.data.forEach(renderMessage);
+
+            scrollToBottom();
+
+            socket.emit("mark_seen", { chatId });
+        }
+
+        /* ================= RENDER ================= */
+        function renderMessage(msg) {
+            const div = document.createElement("div");
+
+            const senderId = msg.sender?._id || msg.sender;
+            const isMe = senderId.toString() === currentUserId.toString();
+
+            div.id = "msg_" + msg._id;
+
+            let status = "✓";
+
+            if (msg.seenBy?.length > 1) status = "🔵";
+            else if (msg.deliveredTo?.length > 1) status = "✓✓";
+
+            div.innerHTML = `
+        <div style="text-align:${isMe ? "right" : "left"};">
+            ${msg.text || ""}
+            ${isMe ? `<small id="status_${msg._id}">${status}</small>` : ""}
+        </div>
+    `;
+
+            document.getElementById("messages").appendChild(div);
+        }
+
+        /* ================= SCROLL ================= */
+        function scrollToBottom() {
+            const container = document.getElementById("messages");
+            container.scrollTop = container.scrollHeight;
+        }
+
+        /* ================= SEND MESSAGE ================= */
+        document.getElementById("messageInput").addEventListener("input", () => {
+            if (!currentChatId) return;
+
+            socket.emit("typing", { chatId: currentChatId });
+
+            clearTimeout(typingEmitTimeout);
+
+            typingEmitTimeout = setTimeout(() => {
+                socket.emit("stop_typing", { chatId: currentChatId });
+            }, 1000);
+        });
+
+        document.getElementById("messageInput").addEventListener("keydown", async (e) => {
+            if (!currentChatId) return;
+
+            if (e.key === "Enter") {
+                const text = e.target.value.trim();
+                if (!text) return;
+
+                e.target.value = "";
+
+                const token = document.getElementById("token").value;
+
+                const formData = new FormData();
+                formData.append("chatId", currentChatId);
+                formData.append("text", text);
+
+                await fetch("http://localhost:5000/api/chat/sendMessage", {
+                    method: "POST",
+                    headers: { Authorization: "Bearer " + token },
+                    body: formData
+                });
+
+                socket.emit("stop_typing", { chatId: currentChatId });
+            }
+        });
+
+        /* ================= SOCKET ================= */
+        function setupSocket() {
+
+            socket.on("receive_message", (msg) => {
+                if (msg.chat.toString() === currentChatId.toString()) {
+                    renderMessage(msg);
+                    scrollToBottom();
+                    socket.emit("mark_seen", { chatId: currentChatId });
+                }
+            });
+
+            socket.on("message_delivered", () => {
+                document.querySelectorAll("[id^='status_']").forEach(el => {
+                    if (el.innerText === "✓") el.innerText = "✓✓";
+                });
+            });
+
+            socket.on("message_seen", () => {
+                document.querySelectorAll("[id^='status_']").forEach(el => {
+                    el.innerText = "🔵";
+                });
+            });
+
+            socket.on("typing", () => {
+                const header = document.getElementById("chatHeader");
+
+                header.innerText = header.innerText.replace(" ✍️ typing...", "") + " ✍️ typing...";
+
+                clearTimeout(typingTimeout);
+
+                typingTimeout = setTimeout(() => {
+                    header.innerText = header.innerText.replace(" ✍️ typing...", "");
+                }, 1500);
+            });
+
+            socket.on("stop_typing", () => {
+                const header = document.getElementById("chatHeader");
+                header.innerText = header.innerText.replace(" ✍️ typing...", "");
+            });
+
+            socket.on("user_status", (data) => {
+                console.log(data);
+
+                const header = document.getElementById("chatHeader");
+
+                header.innerText = header.innerText.replace(" 🟢", "").replace(" ⚫", "");
+
+                if (data.isOnline) {
+                    header.innerText += " 🟢";
+                } else {
+                    header.innerText += " ⚫";
+                }
+            });
+
+            socket.on("unread_update", () => {
+                loadChats(document.getElementById("token").value);
+            });
+        }
+    </script>
+
+</body>
+
+</html>

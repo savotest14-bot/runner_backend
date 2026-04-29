@@ -8,6 +8,8 @@ const buildInvoiceEmail = require("../utils/emailTemplates/invoiceEmail");
 const { sendSimpleMail } = require("../functions/sendSimpleMail");
 const SubTask = require("../models/subtask");
 const Payment = require("../models/Payment");
+const EmployeeSalary = require("../models/EmployeeSalary");
+const mongoose = require("mongoose");
 
 exports.updateMyProfilePic = async (req, res) => {
   try {
@@ -383,17 +385,109 @@ const generateInvoice = async (contractId) => {
   return invoice;
 };
 
-const generateEmployeePayments = async (contractId) => {
+const updateEmployeeSalary = async (employeeId, amount, data, employee) => {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+
+  const config = employee.employeeProfile?.employeePayment || {};
+  const deductions = config.deductions || {};
+  const bonus = config.bonus || 0;
+
+  // 🔥 Deduction calc
+  const pf = (amount * (deductions.pf || 0)) / 100;
+  const esi = (amount * (deductions.esi || 0)) / 100;
+  const tax = (amount * (deductions.tax || 0)) / 100;
+  const other = deductions.other || 0;
+
+  const totalDeduction = pf + esi + tax + other;
+
+  const net = amount + bonus - totalDeduction;
+
+  await EmployeeSalary.findOneAndUpdate(
+    { employee: employeeId, month, year },
+    {
+      $inc: {
+        grossAmount: amount,
+        totalTasks: data.totalTasks,
+        totalTimeSeconds: data.totalTime,
+        deduction: totalDeduction,
+        netSalary: net,
+
+        "deductionBreakdown.pf": pf,
+        "deductionBreakdown.esi": esi,
+        "deductionBreakdown.tax": tax,
+        "deductionBreakdown.other": other,
+      },
+      $setOnInsert: {
+        company: employee.company,
+        bonus,
+        status: "pending",
+      },
+    },
+    { upsert: true, new: true }
+  );
+};
+
+const getWorkedDays = async (employeeId, reportId) => {
+  const report = await WorkReport.findById(reportId);
+
+  if (!report) return 0;
+
+  const subTaskIds = report.completedSubTasks.map(
+    (s) => new mongoose.Types.ObjectId(s.subTaskId)
+  );
+
+  if (!subTaskIds.length) return 0;
+
+  const result = await SubTask.aggregate([
+    {
+      $match: {
+        _id: { $in: subTaskIds },
+        assignedTo: new mongoose.Types.ObjectId(employeeId), // ✅ FIXED
+        status: "completed",
+      },
+    },
+    {
+      $project: {
+        day: {
+          $dateToString: {
+            format: "%Y-%m-%d",
+            date: "$updatedAt",
+            timezone: "Asia/Kolkata",
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: "$day",
+      },
+    },
+    {
+      $count: "totalDays",
+    },
+  ]);
+
+  return result[0]?.totalDays || 0;
+};
+
+const generateEmployeePayments = async (contractId, reportId) => {
+
   const reports = await WorkReport.find({
+    _id: reportId,
     contract: contractId,
     status: "approved",
-    isBilled: false, // 🔥 ADD THIS
+    isBilled: false,
   });
+
+  if (!reports.length) return;
 
   const employeeMap = {};
 
+  // 🔥 Aggregate employee data
   for (const report of reports) {
-    const breakdown = report.employeeBreakdown || []; // ✅ safe
+    const breakdown = report.employeeBreakdown || [];
 
     for (const emp of breakdown) {
       const id = emp.employee.toString();
@@ -412,6 +506,7 @@ const generateEmployeePayments = async (contractId) => {
     }
   }
 
+  // 🔥 Process each employee
   for (const empId in employeeMap) {
     const data = employeeMap[empId];
 
@@ -421,38 +516,65 @@ const generateEmployeePayments = async (contractId) => {
     const paymentConfig =
       employee.employeeProfile?.employeePayment || {};
 
-    const type = paymentConfig.type || "hourly";
+    const type = paymentConfig.paymentType || "hourly";
 
     let amount = 0;
 
-    // ✅ prevent duplicate payment
+    // 🔥 prevent duplicate
     const alreadyExists = await EmployeePayment.findOne({
       employee: empId,
       contract: contractId,
+      report: reportId,
       paymentType: type,
     });
 
-    if (alreadyExists && type !== "hourly") continue;
+    if (alreadyExists) continue;
+
+    // ================= CALCULATION =================
 
     if (type === "hourly") {
       amount =
         (data.totalTime / 3600) *
         (paymentConfig.hourlyRate || 0);
+
     } else if (type === "per_service") {
-      amount = data.totalAmount;
+      amount =
+        (data.totalTasks || 0) *
+        (paymentConfig.perServiceRate || 0);
+
     } else if (type === "fixed") {
-      amount = paymentConfig.fixedSalary || 0;
+
+      const now = new Date();
+
+      const daysInMonth = new Date(
+        now.getFullYear(),
+        now.getMonth() + 1,
+        0
+      ).getDate();
+
+      const perDaySalary =
+        (paymentConfig.fixedSalary || 0) / daysInMonth;
+
+      // ✅ get real worked days
+      const workedDays = await getWorkedDays(empId, reportId);
+      amount = perDaySalary * workedDays;
     }
+
+    // ================= SAVE =================
 
     await EmployeePayment.create({
       employee: empId,
       contract: contractId,
+      report: reportId,
       company: employee.company,
       totalTimeSeconds: data.totalTime,
       totalTasks: data.totalTasks,
       amount,
       paymentType: type,
     });
+
+    // 🔥 update salary
+    await updateEmployeeSalary(empId, amount, data, employee);
   }
 };
 
@@ -481,7 +603,7 @@ exports.approveWorkReport = async (req, res) => {
 
 
     // 🔥 PAYROLL (OK to auto)
-    await generateEmployeePayments(report.contract);
+    await generateEmployeePayments(report.contract, report._id);
 
     // 🔥 CREATE DRAFT INVOICE ONLY
     const invoice = await generateInvoice(report.contract);
@@ -495,6 +617,54 @@ exports.approveWorkReport = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Error approving report" });
+  }
+};
+
+exports.generateFixedSalary = async () => {
+  const now = new Date();
+
+  const startOfMonth = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    1
+  );
+
+  const employees = await User.find({
+    "employeeProfile.employeePayment.paymentType": "fixed",
+  });
+
+  for (const employee of employees) {
+    const empId = employee._id;
+
+    const config =
+      employee.employeeProfile?.employeePayment || {};
+
+    const fixedSalary = config.fixedSalary || 0;
+
+    // ❌ prevent duplicate monthly salary
+    const alreadyPaid = await EmployeePayment.findOne({
+      employee: empId,
+      paymentType: "fixed",
+      createdAt: { $gte: startOfMonth },
+    });
+
+    if (alreadyPaid) continue;
+
+    // ✅ create salary payment
+    await EmployeePayment.create({
+      employee: empId,
+      company: employee.company,
+      amount: fixedSalary,
+      paymentType: "fixed",
+    });
+
+    // ✅ update salary summary
+    await updateEmployeeSalary(
+      empId,
+      fixedSalary,
+      { totalTasks: 0, totalTime: 0 },
+      employee
+    );
   }
 };
 
@@ -552,6 +722,7 @@ exports.sendInvoice = async (req, res) => {
 
     // ✅ UPDATE STATUS
     invoice.status = "sent";
+    invoice.sentAt = new Date();
     await invoice.save();
 
     return res.json({
@@ -565,6 +736,135 @@ exports.sendInvoice = async (req, res) => {
   }
 };
 
+exports.getAllInvoices = async (req, res) => {
+  try {
+    // ================= PAGINATION =================
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.max(parseInt(req.query.limit) || 10, 1);
+    const skip = (page - 1) * limit;
+
+    const { status, clientId, contractId } = req.query;
+
+    const query = {};
+
+    // ================= ROLE-BASED FILTER =================
+    if (req.user?.role?.name !== "superAdmin") {
+      query.company = req.user.company;
+    }
+
+    // ================= STATUS VALIDATION =================
+    const allowedStatus = [
+      "draft",
+      "sent",
+      "partially_paid",
+      "paid",
+      "overdue",
+    ];
+
+    if (status) {
+      const statusArray = status.split(",");
+      const invalidStatus = statusArray.find(
+        (s) => !allowedStatus.includes(s)
+      );
+
+      if (invalidStatus) {
+        return res.status(400).json({
+          message: `Invalid status: ${invalidStatus}`,
+        });
+      }
+
+      query.status = { $in: statusArray };
+    }
+
+    // ================= OBJECT ID VALIDATION =================
+    if (clientId) {
+      if (!mongoose.Types.ObjectId.isValid(clientId)) {
+        return res.status(400).json({
+          message: "Invalid clientId",
+        });
+      }
+      query.client = clientId;
+    }
+
+    if (contractId) {
+      if (!mongoose.Types.ObjectId.isValid(contractId)) {
+        return res.status(400).json({
+          message: "Invalid contractId",
+        });
+      }
+      query.contract = contractId;
+    }
+
+    // ================= FETCH DATA =================
+    const [invoices, total] = await Promise.all([
+      Invoice.find(query)
+        .populate("client", "name email")
+        .populate("contract", "contractNumber")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+
+      Invoice.countDocuments(query),
+    ]);
+
+    return res.json({
+      success: true,
+      data: invoices,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Error fetching invoices",
+    });
+  }
+};
+
+exports.getInvoiceById = async (req, res) => {
+  try {
+    const { invoiceId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(invoiceId)) {
+      return res.status(400).json({
+        message: "Invalid invoiceId",
+      });
+    }
+
+    const query = { _id: invoiceId };
+
+    if (req.user?.role?.name !== "superAdmin") {
+      query.company = req.user.company;
+    }
+
+    const invoice = await Invoice.findOne(query)
+      .populate("client", "name email phone address")
+      .populate("contract", "contractNumber startDate endDate")
+      .populate("company", "name email")
+
+    if (!invoice) {
+      return res.status(404).json({
+        message: "Invoice not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: invoice,
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      message: "Error fetching invoice details",
+    });
+  }
+};
 
 exports.payInvoice = async (req, res) => {
   try {

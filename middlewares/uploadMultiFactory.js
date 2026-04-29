@@ -3,7 +3,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const createMultiUpload = ({ fields, maxSizeMB = 2 }) => {
+const createMultiUpload = ({ fields, maxSizeMB = 25 }) => {
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
       const field = fields.find(f => f.name === file.fieldname);

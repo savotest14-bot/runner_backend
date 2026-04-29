@@ -86,7 +86,7 @@ const contractSchema = new mongoose.Schema(
         billingType: {
             type: String,
             enum: ["fixed", "per_service", "hourly"],
-            default: "per_service"
+            default: "fixed"
         },
 
         hourlyRate: {

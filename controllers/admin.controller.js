@@ -2518,7 +2518,50 @@ exports.createRunnerEmployee = async (req, res) => {
         message: "Missing firstName or email or phone or required fields",
       });
     }
+    const {
+      paymentType,
+      hourlyRate,
+      perServiceRate,
+      fixedSalary,
+      pf,
+      esi,
+      tax,
+      otherDeduction,
+      bonus,
+    } = req.body;
 
+    // ✅ paymentType required
+    if (!paymentType) {
+      return res.status(400).json({
+        message: "paymentType is required",
+      });
+    }
+
+    // ✅ validate based on type
+    if (paymentType === "hourly" && !hourlyRate) {
+      return res.status(400).json({
+        message: "hourlyRate is required for hourly payment",
+      });
+    }
+
+    if (paymentType === "per_service" && !perServiceRate) {
+      return res.status(400).json({
+        message: "perServiceRate is required for per_service payment",
+      });
+    }
+
+    if (paymentType === "fixed" && !fixedSalary) {
+      return res.status(400).json({
+        message: "fixedSalary is required for fixed payment",
+      });
+    }
+
+    // ✅ REQUIRED deductions
+    if (pf === undefined || esi === undefined || tax === undefined) {
+      return res.status(400).json({
+        message: "pf, esi and tax are required fields",
+      });
+    }
     const existingEmail = await User.findOne({
       email: email.toLowerCase(),
       isDeleted: false,
@@ -2594,7 +2637,24 @@ exports.createRunnerEmployee = async (req, res) => {
       privatePhoneNumber: req.body.privatePhoneNumber,
 
       ahvNumber: req.body.ahvNumber,
-      salaryAndWageDetails: req.body.salaryAndWageDetails,
+      employeePayment: {
+        paymentType: req.body.paymentType || "fixed",
+
+        hourlyRate: Number(req.body.hourlyRate) || 0,
+        perServiceRate: Number(req.body.perServiceRate) || 0,
+        fixedSalary: Number(req.body.fixedSalary) || 0,
+
+        // ✅ ADD DEDUCTIONS
+        deductions: {
+          pf: Number(req.body.pf) || 0,       // %
+          esi: Number(req.body.esi) || 0,     // %
+          tax: Number(req.body.tax) || 0,     // %
+          other: Number(req.body.otherDeduction) || 0 // fixed ₹
+        },
+
+        // ✅ ADD BONUS
+        bonus: Number(req.body.bonus) || 0
+      },
       childrens,
       bankAccountInformation: req.body.bankAccountInformation || null,
 

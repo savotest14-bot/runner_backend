@@ -9,7 +9,7 @@ exports.uploadLicenseDocs = createUpload({
     "image/jpeg",
     "image/jpg",
   ],
-  maxSizeMB: 5,
+  maxSizeMB: 25,
   multiple: true,
   maxCount: 5,
 });
@@ -18,19 +18,19 @@ exports.uploadProfileImage = createUpload({
   folder: "profile-images",
   fieldName: "profileImage", 
   allowedTypes: ["image/png", "image/jpeg", "image/jpg"],
-  maxSizeMB: 2,
+  maxSizeMB: 25,
 });
 
 exports.uploadCompanyLogo = createUpload({
   folder: "company-logos",
   fieldName: "companyLogo", 
   allowedTypes: ["image/png", "image/jpeg", "image/jpg"],
-  maxSizeMB: 2,
+  maxSizeMB: 25,
 });
 
 exports.uploadGroupLogo = createUpload({
   folder: "group-logos",
   fieldName: "groupLogo", 
   allowedTypes: ["image/png", "image/jpeg", "image/jpg"],
-  maxSizeMB: 2,
+  maxSizeMB: 25,
 });

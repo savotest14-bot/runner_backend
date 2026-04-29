@@ -6,7 +6,7 @@ const createUpload = ({
   folder,
   fieldName, 
   allowedTypes = [],
-  maxSizeMB = 5,
+  maxSizeMB = 25,
   multiple = false,
   maxCount = 1,
 }) => {

@@ -66,7 +66,50 @@ exports.createEmployee = async (req, res) => {
                 message: "Missing firstName or email or phone or required fields",
             });
         }
+        const {
+            paymentType,
+            hourlyRate,
+            perServiceRate,
+            fixedSalary,
+            pf,
+            esi,
+            tax,
+            otherDeduction,
+            bonus,
+        } = req.body;
 
+        // ✅ paymentType required
+        if (!paymentType) {
+            return res.status(400).json({
+                message: "paymentType is required",
+            });
+        }
+
+        // ✅ validate based on type
+        if (paymentType === "hourly" && !hourlyRate) {
+            return res.status(400).json({
+                message: "hourlyRate is required for hourly payment",
+            });
+        }
+
+        if (paymentType === "per_service" && !perServiceRate) {
+            return res.status(400).json({
+                message: "perServiceRate is required for per_service payment",
+            });
+        }
+
+        if (paymentType === "fixed" && !fixedSalary) {
+            return res.status(400).json({
+                message: "fixedSalary is required for fixed payment",
+            });
+        }
+
+        // ✅ REQUIRED deductions
+        if (pf === undefined || esi === undefined || tax === undefined) {
+            return res.status(400).json({
+                message: "pf, esi and tax are required fields",
+            });
+        }
         const existingEmail = await User.findOne({
             email: email.toLowerCase(),
             isDeleted: false,
@@ -145,10 +188,22 @@ exports.createEmployee = async (req, res) => {
 
             ahvNumber: req.body.ahvNumber,
             employeePayment: {
-                type: req.body.paymentType || "fixed",
+                paymentType: req.body.paymentType || "fixed",
+
                 hourlyRate: Number(req.body.hourlyRate) || 0,
                 perServiceRate: Number(req.body.perServiceRate) || 0,
                 fixedSalary: Number(req.body.fixedSalary) || 0,
+
+                // ✅ ADD DEDUCTIONS
+                deductions: {
+                    pf: Number(req.body.pf) || 0,       // %
+                    esi: Number(req.body.esi) || 0,     // %
+                    tax: Number(req.body.tax) || 0,     // %
+                    other: Number(req.body.otherDeduction) || 0 // fixed ₹
+                },
+
+                // ✅ ADD BONUS
+                bonus: Number(req.body.bonus) || 0
             },
             childrens,
             bankAccountInformation: req.body.bankAccountInformation || null,
@@ -1067,26 +1122,25 @@ exports.toggleEmployeeDeleteByCompanyAdmin = async (req, res) => {
 
 exports.getEmployeeFinancial = async (req, res) => {
     try {
-        const employeeId = req.user._id;
+        const employeeId = new mongoose.Types.ObjectId(req.user._id);
+
+        const today = new Date();
 
         const startOfMonth = new Date(
-            new Date().getFullYear(),
-            new Date().getMonth(),
+            today.getFullYear(),
+            today.getMonth(),
             1
         );
 
         // ================= TOTAL EARNINGS =================
-        const totalEarningsAgg = await SubTask.aggregate([
+        const totalEarningsAgg = await EmployeePayment.aggregate([
             {
-                $match: {
-                    assignedTo: employeeId,
-                    status: "completed",
-                },
+                $match: { employee: employeeId },
             },
             {
                 $group: {
                     _id: null,
-                    total: { $sum: "$subtaskPrice" },
+                    total: { $sum: "$amount" },
                 },
             },
         ]);
@@ -1117,19 +1171,18 @@ exports.getEmployeeFinancial = async (req, res) => {
 
         const pendingAmount = pendingAgg[0]?.total || 0;
 
-        // ================= THIS MONTH =================
-        const monthlyAgg = await SubTask.aggregate([
+        // ================= THIS MONTH EARNINGS =================
+        const monthlyAgg = await EmployeePayment.aggregate([
             {
                 $match: {
-                    assignedTo: employeeId,
-                    status: "completed",
-                    updatedAt: { $gte: startOfMonth },
+                    employee: employeeId,
+                    createdAt: { $gte: startOfMonth },
                 },
             },
             {
                 $group: {
                     _id: null,
-                    total: { $sum: "$subtaskPrice" },
+                    total: { $sum: "$amount" },
                 },
             },
         ]);
@@ -1137,31 +1190,26 @@ exports.getEmployeeFinancial = async (req, res) => {
         const thisMonthEarnings = monthlyAgg[0]?.total || 0;
 
         // ================= RECENT TRANSACTIONS =================
-        const recentTransactions = await SubTask.find({
-            assignedTo: employeeId,
+        const recentTransactions = await EmployeePayment.find({
+            employee: employeeId,
         })
-            .sort({ updatedAt: -1 })
+            .sort({ createdAt: -1 })
             .limit(5)
-            .select(
-                "subTaskName subtaskPrice status updatedAt"
-            );
+            .select("amount createdAt");
 
         // ================= MONTHLY EARNINGS GRAPH =================
-        const monthlyGraph = await SubTask.aggregate([
+        const monthlyGraph = await EmployeePayment.aggregate([
             {
-                $match: {
-                    assignedTo: employeeId,
-                    status: "completed",
-                },
+                $match: { employee: employeeId },
             },
             {
                 $group: {
-                    _id: { $month: "$updatedAt" },
-                    total: { $sum: "$subtaskPrice" },
+                    _id: { $month: "$createdAt" },
+                    total: { $sum: "$amount" },
                 },
             },
             {
-                $sort: { "_id": 1 },
+                $sort: { _id: 1 },
             },
         ]);
 
@@ -1182,12 +1230,12 @@ exports.getEmployeeFinancial = async (req, res) => {
 
         let completed = 0,
             inProgress = 0,
-            failed = 0;
+            pending = 0;
 
         statusAgg.forEach((s) => {
             if (s._id === "completed") completed = s.count;
             if (s._id === "in_progress") inProgress = s.count;
-            if (s._id === "pending") failed = s.count;
+            if (s._id === "pending") pending = s.count;
         });
 
         return res.status(200).json({
@@ -1207,8 +1255,247 @@ exports.getEmployeeFinancial = async (req, res) => {
                 taskStats: {
                     completed,
                     inProgress,
-                    pending: failed,
+                    pending,
                 },
+            },
+        });
+
+    } catch (error) {
+        console.error("Financial API error:", error);
+        return res.status(500).json({
+            message: "Failed to load financial data",
+        });
+    }
+};
+
+
+exports.getEmployeeDashboard = async (req, res) => {
+    try {
+        const employeeId = new mongoose.Types.ObjectId(req.user._id);
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+
+        const startOfMonth = new Date(
+            todayStart.getFullYear(),
+            todayStart.getMonth(),
+            1
+        );
+
+        const startOfWeek = new Date();
+        startOfWeek.setDate(startOfWeek.getDate() - 7);
+
+        // ================= TASK CARDS =================
+
+        const totalAssigned = await SubTask.countDocuments({
+            assignedTo: employeeId,
+        });
+
+        const activeTasks = await SubTask.countDocuments({
+            assignedTo: employeeId,
+            status: "in_progress",
+        });
+
+        const completedTasks = await SubTask.countDocuments({
+            assignedTo: employeeId,
+            status: "completed",
+        });
+
+        // ================= ✅ EARNINGS (FIXED) =================
+
+        const totalEarningsAgg = await EmployeePayment.aggregate([
+            {
+                $match: { employee: employeeId },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                },
+            },
+        ]);
+
+        const totalEarnings = totalEarningsAgg[0]?.total || 0;
+
+        // ================= TODAY TASKS =================
+
+        const todayTasks = await SubTask.find({
+            assignedTo: employeeId,
+            createdAt: { $gte: todayStart, $lte: todayEnd },
+        })
+            .select(
+                "subTaskName subtaskPrice status estimatedDurationSeconds createdAt"
+            )
+            .sort({ createdAt: 1 });
+
+        // ================= FINANCIAL =================
+
+        const weeklyIncomeAgg = await EmployeePayment.aggregate([
+            {
+                $match: {
+                    employee: employeeId,
+                    createdAt: { $gte: startOfWeek },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                },
+            },
+        ]);
+
+        const weeklyIncome = weeklyIncomeAgg[0]?.total || 0;
+
+        const monthlyIncomeAgg = await EmployeePayment.aggregate([
+            {
+                $match: {
+                    employee: employeeId,
+                    createdAt: { $gte: startOfMonth },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                },
+            },
+        ]);
+
+        const monthlyIncome = monthlyIncomeAgg[0]?.total || 0;
+
+        const monthlyTarget = 5000;
+
+        const progress =
+            monthlyTarget > 0
+                ? Math.min((monthlyIncome / monthlyTarget) * 100, 100)
+                : 0;
+
+        // ================= PERFORMANCE =================
+
+        const totalTasks = totalAssigned || 1;
+
+        const completionRate = Math.round(
+            (completedTasks / totalTasks) * 100
+        );
+
+        const onTimeAgg = await SubTask.aggregate([
+            {
+                $match: {
+                    assignedTo: employeeId,
+                    status: "completed",
+                    expectedEndTime: { $ne: null },
+                },
+            },
+            {
+                $project: {
+                    onTime: {
+                        $cond: [
+                            { $lte: ["$timerCompletedAt", "$expectedEndTime"] },
+                            1,
+                            0,
+                        ],
+                    },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: 1 },
+                    onTimeCount: { $sum: "$onTime" },
+                },
+            },
+        ]);
+
+        const onTimeDelivery =
+            onTimeAgg[0]?.total > 0
+                ? Math.round(
+                    (onTimeAgg[0].onTimeCount / onTimeAgg[0].total) * 100
+                )
+                : 0;
+
+        const qualityScore = 90;
+
+        // ================= MONTHLY GRAPH (FIXED) =================
+
+        const monthlyGraph = await EmployeePayment.aggregate([
+            {
+                $match: { employee: employeeId },
+            },
+            {
+                $group: {
+                    _id: { $month: "$createdAt" },
+                    total: { $sum: "$amount" },
+                },
+            },
+            { $sort: { "_id": 1 } },
+        ]);
+
+        // ================= WEEKLY GRAPH =================
+
+        const weeklyGraph = await EmployeePayment.aggregate([
+            {
+                $match: {
+                    employee: employeeId,
+                    createdAt: { $gte: startOfWeek },
+                },
+            },
+            {
+                $group: {
+                    _id: { $dayOfWeek: "$createdAt" },
+                    total: { $sum: "$amount" },
+                    count: { $sum: 1 },
+                },
+            },
+            { $sort: { "_id": 1 } },
+        ]);
+
+        // ================= RECENT ACTIVITY =================
+
+        const recentActivity = await SubTask.find({
+            assignedTo: employeeId,
+        })
+            .sort({ updatedAt: -1 })
+            .limit(5)
+            .select("subTaskName status updatedAt");
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                cards: {
+                    totalAssigned,
+                    activeTasks,
+                    completedTasks,
+                    totalEarnings,
+                },
+
+                todayTasks,
+
+                financial: {
+                    earningsPerTask:
+                        completedTasks > 0
+                            ? Math.round(totalEarnings / completedTasks)
+                            : 0,
+                    weeklyIncome,
+                    monthlyTarget,
+                    progress: Math.round(progress),
+                },
+
+                performance: {
+                    completionRate,
+                    qualityScore,
+                    onTimeDelivery,
+                },
+
+                charts: {
+                    monthlyIncome: monthlyGraph,
+                    weeklyStats: weeklyGraph,
+                },
+
+                recentActivity,
             },
         });
 
@@ -1218,243 +1505,4 @@ exports.getEmployeeFinancial = async (req, res) => {
             message: "Failed to load dashboard",
         });
     }
-};
-
-
-exports.getEmployeeDashboard = async (req, res) => {
-  try {
-    const employeeId = new mongoose.Types.ObjectId(req.user._id);
-
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
-    const startOfMonth = new Date(
-      todayStart.getFullYear(),
-      todayStart.getMonth(),
-      1
-    );
-
-    const startOfWeek = new Date();
-    startOfWeek.setDate(startOfWeek.getDate() - 7);
-
-    // ================= TASK CARDS =================
-
-    const totalAssigned = await SubTask.countDocuments({
-      assignedTo: employeeId,
-    });
-
-    const activeTasks = await SubTask.countDocuments({
-      assignedTo: employeeId,
-      status: "in_progress",
-    });
-
-    const completedTasks = await SubTask.countDocuments({
-      assignedTo: employeeId,
-      status: "completed",
-    });
-
-    // ================= ✅ EARNINGS (FIXED) =================
-
-    const totalEarningsAgg = await EmployeePayment.aggregate([
-      {
-        $match: { employee: employeeId },
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$amount" },
-        },
-      },
-    ]);
-
-    const totalEarnings = totalEarningsAgg[0]?.total || 0;
-
-    // ================= TODAY TASKS =================
-
-    const todayTasks = await SubTask.find({
-      assignedTo: employeeId,
-      createdAt: { $gte: todayStart, $lte: todayEnd },
-    })
-      .select(
-        "subTaskName subtaskPrice status estimatedDurationSeconds createdAt"
-      )
-      .sort({ createdAt: 1 });
-
-    // ================= FINANCIAL =================
-
-    const weeklyIncomeAgg = await EmployeePayment.aggregate([
-      {
-        $match: {
-          employee: employeeId,
-          createdAt: { $gte: startOfWeek },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$amount" },
-        },
-      },
-    ]);
-
-    const weeklyIncome = weeklyIncomeAgg[0]?.total || 0;
-
-    const monthlyIncomeAgg = await EmployeePayment.aggregate([
-      {
-        $match: {
-          employee: employeeId,
-          createdAt: { $gte: startOfMonth },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$amount" },
-        },
-      },
-    ]);
-
-    const monthlyIncome = monthlyIncomeAgg[0]?.total || 0;
-
-    const monthlyTarget = 5000;
-
-    const progress =
-      monthlyTarget > 0
-        ? Math.min((monthlyIncome / monthlyTarget) * 100, 100)
-        : 0;
-
-    // ================= PERFORMANCE =================
-
-    const totalTasks = totalAssigned || 1;
-
-    const completionRate = Math.round(
-      (completedTasks / totalTasks) * 100
-    );
-
-    const onTimeAgg = await SubTask.aggregate([
-      {
-        $match: {
-          assignedTo: employeeId,
-          status: "completed",
-          expectedEndTime: { $ne: null },
-        },
-      },
-      {
-        $project: {
-          onTime: {
-            $cond: [
-              { $lte: ["$timerCompletedAt", "$expectedEndTime"] },
-              1,
-              0,
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          onTimeCount: { $sum: "$onTime" },
-        },
-      },
-    ]);
-
-    const onTimeDelivery =
-      onTimeAgg[0]?.total > 0
-        ? Math.round(
-            (onTimeAgg[0].onTimeCount / onTimeAgg[0].total) * 100
-          )
-        : 0;
-
-    const qualityScore = 90;
-
-    // ================= MONTHLY GRAPH (FIXED) =================
-
-    const monthlyGraph = await EmployeePayment.aggregate([
-      {
-        $match: { employee: employeeId },
-      },
-      {
-        $group: {
-          _id: { $month: "$createdAt" },
-          total: { $sum: "$amount" },
-        },
-      },
-      { $sort: { "_id": 1 } },
-    ]);
-
-    // ================= WEEKLY GRAPH =================
-
-    const weeklyGraph = await EmployeePayment.aggregate([
-      {
-        $match: {
-          employee: employeeId,
-          createdAt: { $gte: startOfWeek },
-        },
-      },
-      {
-        $group: {
-          _id: { $dayOfWeek: "$createdAt" },
-          total: { $sum: "$amount" },
-          count: { $sum: 1 },
-        },
-      },
-      { $sort: { "_id": 1 } },
-    ]);
-
-    // ================= RECENT ACTIVITY =================
-
-    const recentActivity = await SubTask.find({
-      assignedTo: employeeId,
-    })
-      .sort({ updatedAt: -1 })
-      .limit(5)
-      .select("subTaskName status updatedAt");
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        cards: {
-          totalAssigned,
-          activeTasks,
-          completedTasks,
-          totalEarnings,
-        },
-
-        todayTasks,
-
-        financial: {
-          earningsPerTask:
-            completedTasks > 0
-              ? Math.round(totalEarnings / completedTasks)
-              : 0,
-          weeklyIncome,
-          monthlyTarget,
-          progress: Math.round(progress),
-        },
-
-        performance: {
-          completionRate,
-          qualityScore,
-          onTimeDelivery,
-        },
-
-        charts: {
-          monthlyIncome: monthlyGraph,
-          weeklyStats: weeklyGraph,
-        },
-
-        recentActivity,
-      },
-    });
-
-  } catch (error) {
-    console.error("Dashboard error:", error);
-    return res.status(500).json({
-      message: "Failed to load dashboard",
-    });
-  }
 };

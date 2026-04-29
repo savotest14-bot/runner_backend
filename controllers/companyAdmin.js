@@ -54,8 +54,12 @@ exports.getAllClientsForCompanyAdmin = async (req, res) => {
           name: client.name,
           email: client.email,
           phone: client.phone,
+          addressline1: client.addressLine1,
+          addressline2:client.addressLine2,
+          state:client.state,
           city: client.city,
           country: client.country,
+          pincode:client.pincode,
           clientLogo: client.clientLogo,
           createdAt: client.createdAt,
 

@@ -6,7 +6,9 @@ const fs = require("fs");
 const BASE_UPLOAD_PATH = path.join(process.cwd(), "uploads");
 
 const UPLOAD_PATHS = Object.freeze({
- workImage:"workImage"
+ workImage:"workImage",
+ ticketFile:"ticketFile",
+ chatFile:"chatFile"
 });
 
 const ensureDir = (dir) => {

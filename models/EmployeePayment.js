@@ -6,7 +6,10 @@ const employeePaymentSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
         },
-
+        report: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "WorkReport"
+        },
         contract: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Contract",
@@ -16,6 +19,7 @@ const employeePaymentSchema = new mongoose.Schema(
             ref: "Company",
             required: true,
         },
+        paymentType: String,
         totalTimeSeconds: Number,
         totalTasks: Number,
         amount: Number,

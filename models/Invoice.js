@@ -72,7 +72,6 @@ const invoiceSchema = new mongoose.Schema(
 invoiceSchema.pre("save", function () {
   this.remainingAmount = this.amount - this.paidAmount;
 
-  // auto status update
   if (this.paidAmount === 0) {
     this.status = this.status === "draft" ? "draft" : "sent";
   } else if (this.paidAmount < this.amount) {
@@ -80,6 +79,15 @@ invoiceSchema.pre("save", function () {
   } else if (this.paidAmount >= this.amount) {
     this.status = "paid";
     this.paidAt = new Date();
+  }
+
+  // 🔥 NEW: overdue logic
+  if (
+    this.status !== "paid" &&
+    this.dueDate &&
+    new Date() > this.dueDate
+  ) {
+    this.status = "overdue";
   }
 });
 

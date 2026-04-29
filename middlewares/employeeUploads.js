@@ -1,7 +1,7 @@
 const createMultiUpload = require("./uploadMultiFactory");
 
 exports.uploadEmployeeImages = createMultiUpload({
-  maxSizeMB: 2,
+  maxSizeMB: 25,
   fields: [
     {
       name: "profileImage",
@@ -25,7 +25,7 @@ exports.uploadEmployeeImages = createMultiUpload({
 });
 
 exports.uploadContractFiles = createMultiUpload({
-  maxSizeMB: 5,
+  maxSizeMB: 25,
   fields: [
     {
       name: "clientLogo",

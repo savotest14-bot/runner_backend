@@ -49,23 +49,26 @@ const employeeProfileSchema = new mongoose.Schema(
     ahvNumber: String,
 
     employeePayment: {
-      type: {
+      paymentType: {
         type: String,
         enum: ["fixed", "hourly", "per_service"],
         default: "fixed"
       },
 
-      hourlyRate: {
-        type: Number,
-        default: 0
+      hourlyRate: { type: Number, default: 0 },
+      perServiceRate: { type: Number, default: 0 },
+      fixedSalary: { type: Number, default: 0 },
+
+      // ✅ ADD THIS (VERY IMPORTANT)
+      deductions: {
+        pf: { type: Number, default: 0 },          // Provident Fund (% or fixed)
+        esi: { type: Number, default: 0 },         // ESI
+        tax: { type: Number, default: 0 },         // Income tax
+        other: { type: Number, default: 0 },       // misc deductions
       },
 
-      perServiceRate: {
-        type: Number,
-        default: 0
-      },
-
-      fixedSalary: {
+      // ✅ Optional bonus config
+      bonus: {
         type: Number,
         default: 0
       }
@@ -127,7 +130,10 @@ const userSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
     },
-
+    fcmToken: {
+      type: String,
+      default: null
+    },
     password: {
       type: String,
       required: true,
@@ -182,6 +188,14 @@ const userSchema = new mongoose.Schema(
     token: {
       type: String,
       select: false
+    },
+    lastSeen: {
+      type: Date,
+      default: null
+    },
+    isOnline: {
+      type: Boolean,
+      default: false
     },
     isDeleted: {
       type: Boolean,

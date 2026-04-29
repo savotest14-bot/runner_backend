@@ -5,7 +5,7 @@ const authorize = require("../middlewares/authorize");
 const { uploadContractFiles } = require("../middlewares/employeeUploads"); 
 const { getAllClientsForCompanyAdmin, getAllPropertiesForCompanyAdmin, getTemplatesForAdmin, updateCompanyLogo, getCompanyAdminDashboard } = require("../controllers/companyAdmin");
 const { uploadCompanyLogo } = require("../middlewares/uploads");
-const { getAllWorkReports, getWorkReportDetails, approveWorkReport, updateWorkReport, sendInvoice } = require("../controllers/common");
+const { getAllWorkReports, getWorkReportDetails, approveWorkReport, updateWorkReport, sendInvoice, getAllInvoices, getInvoiceById } = require("../controllers/common");
 
 
 // Clients
@@ -44,6 +44,10 @@ router.get("/getWorkReportDetails/:reportId", authenticate, getWorkReportDetails
 router.put("/updateWorkReport/:reportId", authenticate, updateWorkReport);
 
 router.patch("/approveWorkReport/:reportId", authenticate, approveWorkReport);
+
+router.get("/getAllInvoices", authenticate, getAllInvoices)
+
+router.get("/getInvoiceById/:invoiceId", authenticate, getInvoiceById)
 
 router.patch("/sendInvoice/:invoiceId", authenticate, sendInvoice)
 

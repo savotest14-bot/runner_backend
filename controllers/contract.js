@@ -47,6 +47,27 @@ exports.createContract = async (req, res) => {
       hourlyRate = 0
     } = req.body;
 
+
+    const allowedBilling = ["fixed", "per_service", "hourly"];
+
+    billingType = billingType || "per_service";
+
+    if (!allowedBilling.includes(billingType)) {
+      throw new Error("Invalid billingType");
+    }
+
+    hourlyRate = Number(hourlyRate) || 0;
+
+    // ✅ enforce rule
+    if (billingType !== "hourly") {
+      hourlyRate = 0;
+    }
+
+    // ✅ validation
+    if (billingType === "hourly" && hourlyRate <= 0) {
+      throw new Error("hourlyRate must be greater than 0 for hourly billing");
+    }
+
     client = parseIfString(client);
     property = parseIfString(property);
     tasks = parseIfString(tasks);
@@ -691,7 +712,7 @@ exports.createContractByCompanyAdmin = async (req, res) => {
   session.startTransaction();
 
   try {
-    if (req.user.role.name !== "superAdmin") {
+    if (req.user.role.name !== "company_admin") {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -705,7 +726,25 @@ exports.createContractByCompanyAdmin = async (req, res) => {
       billingType = "per_service",
       hourlyRate = 0
     } = req.body;
+    const allowedBilling = ["fixed", "per_service", "hourly"];
 
+    billingType = billingType || "per_service";
+
+    if (!allowedBilling.includes(billingType)) {
+      throw new Error("Invalid billingType");
+    }
+
+    hourlyRate = Number(hourlyRate) || 0;
+
+    // ✅ enforce rule
+    if (billingType !== "hourly") {
+      hourlyRate = 0;
+    }
+
+    // ✅ validation
+    if (billingType === "hourly" && hourlyRate <= 0) {
+      throw new Error("hourlyRate must be greater than 0 for hourly billing");
+    }
     client = parseIfString(client);
     property = parseIfString(property);
     tasks = parseIfString(tasks);
@@ -781,6 +820,7 @@ exports.createContractByCompanyAdmin = async (req, res) => {
             taskCategory: task.taskCategory,
             taskSubCategory: task.taskSubCategory,
             taskDescription: task.description,
+            scheduledDate: task.scheduledDate,
             taskPrice: 0,
             company,
             assignedBy: req.user._id,
