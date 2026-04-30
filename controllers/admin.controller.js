@@ -746,9 +746,9 @@ exports.getCompanyById = async (req, res) => {
         },
 
         documents: company.licenseDocuments || [],
-        
+
         createdBy: company.createdBy,
-        company:company
+        company: company
       },
     });
 
@@ -3180,68 +3180,36 @@ exports.getSuperAdminDashboard = async (req, res) => {
     });
 
     const totalContracts = await Contract.countDocuments();
-
     const totalTasks = await Task.countDocuments();
 
     /* ================= FINANCIAL ================= */
 
-    // ✅ TOTAL EARNING (ONLY FULLY PAID)
     const earningAgg = await Invoice.aggregate([
-      {
-        $match: {
-          remainingAmount: 0, // 🔥 fully paid
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$amount" },
-        },
-      },
+      { $match: { remainingAmount: 0 } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
     ]);
 
     const totalIncome = earningAgg[0]?.total || 0;
 
-    // ⏳ PENDING AMOUNT
     const pendingAgg = await Invoice.aggregate([
-      {
-        $match: {
-          remainingAmount: { $gt: 0 }, // 🔥 pending invoices
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$remainingAmount" },
-        },
-      },
+      { $match: { remainingAmount: { $gt: 0 } } },
+      { $group: { _id: null, total: { $sum: "$remainingAmount" } } },
     ]);
 
     const pendingAmount = pendingAgg[0]?.total || 0;
 
-    // 💸 EXPENSE
     const expenseAgg = await EmployeePayment.aggregate([
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$amount" },
-        },
-      },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
     ]);
 
     const totalExpense = expenseAgg[0]?.total || 0;
 
     const netProfit = totalIncome - totalExpense;
 
-    /* ================= MONTHLY GRAPH ================= */
+    /* ================= CHARTS ================= */
 
-    // ✅ Monthly Earning (only paid)
     const monthlyIncome = await Invoice.aggregate([
-      {
-        $match: {
-          remainingAmount: 0,
-        },
-      },
+      { $match: { remainingAmount: 0 } },
       {
         $group: {
           _id: { $month: "$createdAt" },
@@ -3251,13 +3219,8 @@ exports.getSuperAdminDashboard = async (req, res) => {
       { $sort: { "_id": 1 } },
     ]);
 
-    // ⏳ Monthly Pending
     const monthlyPending = await Invoice.aggregate([
-      {
-        $match: {
-          remainingAmount: { $gt: 0 },
-        },
-      },
+      { $match: { remainingAmount: { $gt: 0 } } },
       {
         $group: {
           _id: { $month: "$createdAt" },
@@ -3267,7 +3230,6 @@ exports.getSuperAdminDashboard = async (req, res) => {
       { $sort: { "_id": 1 } },
     ]);
 
-    // 💸 Monthly Expense
     const monthlyExpense = await EmployeePayment.aggregate([
       {
         $group: {
@@ -3277,8 +3239,6 @@ exports.getSuperAdminDashboard = async (req, res) => {
       },
       { $sort: { "_id": 1 } },
     ]);
-
-    /* ================= TASK TREND ================= */
 
     const taskTrend = await Task.aggregate([
       {
@@ -3290,6 +3250,32 @@ exports.getSuperAdminDashboard = async (req, res) => {
       { $sort: { "_id": 1 } },
     ]);
 
+    /* ================= 🔥 LATEST COMPANIES ================= */
+
+    const latestCompanies = await Company.find({
+      isDeleted: false,
+    })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate("planId", "planName monthlyFee annualFee")
+      .populate("createdBy", "firstName lastName email")
+      .lean();
+
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+    const formattedCompanies = latestCompanies.map((c) => ({
+      ...c,
+
+      // ✅ logo
+      logo: c.logo ? `${baseUrl}${c.logo}` : null,
+
+      // ✅ license documents
+      licenseDocuments: c.licenseDocuments?.map((doc) => ({
+        ...doc,
+        fileUrl: `${baseUrl}${doc.fileUrl}`,
+      })) || [],
+    }));
+
     /* ================= RESPONSE ================= */
 
     return res.status(200).json({
@@ -3300,19 +3286,20 @@ exports.getSuperAdminDashboard = async (req, res) => {
           totalCompanies,
           totalEmployees,
           totalTasks,
-
-          totalIncome,     // ✅ only paid
-          pendingAmount,   // 🔥 NEW FIELD
+          totalIncome,
+          pendingAmount,
           totalExpense,
           netProfit,
         },
 
         charts: {
-          monthlyIncome,   // paid
-          monthlyPending,  // 🔥 NEW
+          monthlyIncome,
+          monthlyPending,
           monthlyExpense,
           taskTrend,
         },
+
+        latestCompanies: formattedCompanies, // 🔥 NEW
       },
     });
 
