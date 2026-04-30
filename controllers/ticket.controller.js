@@ -273,81 +273,180 @@ exports.getTicketById = async (req, res) => {
   }
 };
 
+// exports.updateTicketStatus = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { status } = req.body; // "accepted" | "closed"
+
+//     const allowedStatuses = ["accepted", "closed"];
+
+//     if (!allowedStatuses.includes(status)) {
+//       return res.status(400).json({
+//         message: "Invalid status"
+//       });
+//     }
+
+//     const ticket = await Ticket.findById(id);
+
+//     if (!ticket) {
+//       return res.status(404).json({ message: "Ticket not found" });
+//     }
+
+//     // 🔐 Only assigned user can update
+//     if (ticket.assignedTo.toString() !== req.user._id.toString()) {
+//       return res.status(403).json({ message: "Not allowed" });
+//     }
+
+//     /* ================= STATUS RULES ================= */
+
+//     // ❌ prevent re-processing
+//     if (ticket.status === "closed") {
+//       return res.status(400).json({
+//         message: "Ticket already closed"
+//       });
+//     }
+
+//     // ❌ accept only if open
+//     if (status === "accepted" && ticket.status !== "open") {
+//       return res.status(400).json({
+//         message: "Only open tickets can be accepted"
+//       });
+//     }
+
+//     // ❌ close only if accepted or in_progress
+//     if (
+//       status === "closed" &&
+//       !["accepted", "in_progress"].includes(ticket.status)
+//     ) {
+//       return res.status(400).json({
+//         message: "Ticket must be accepted or in progress to close"
+//       });
+//     }
+
+//     /* ================= UPDATE TICKET ================= */
+
+//     ticket.status = status;
+
+//     if (status === "accepted") {
+//       ticket.chatEnabled = true;
+//     }
+
+//     await ticket.save();
+
+//     /* ================= HANDLE CHAT ONLY ON ACCEPT ================= */
+
+//     let chat = null;
+
+//     if (status === "accepted") {
+//       chat = await Chat.findOne({
+//         type: "ticket",
+//         ticket: ticket._id
+//       });
+
+//       if (!chat) {
+//         chat = await Chat.create({
+//           type: "ticket",
+//           participants: [ticket.createdBy, ticket.assignedTo],
+//           ticket: ticket._id
+//         });
+
+//         const message = await Message.create({
+//           chat: chat._id,
+//           sender: ticket.createdBy,
+//           text: ticket.description,
+//           attachments: ticket.attachments || [],
+//           seenBy: [ticket.createdBy]
+//         });
+
+//         chat.lastMessage = message._id;
+//         await chat.save();
+//       }
+//     }
+
+//     res.json({
+//       success: true,
+//       message:
+//         status === "accepted"
+//           ? "Ticket accepted and chat started"
+//           : "Ticket closed successfully",
+//       data: {
+//         ticketId: ticket._id,
+//         chatId: chat?._id || null
+//       }
+//     });
+
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// };
+
 exports.updateTicketStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body; // "accepted" | "closed"
+    const { status } = req.body;
 
     const allowedStatuses = ["accepted", "closed"];
 
+    // ================= VALIDATION =================
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
-        message: "Invalid status"
+        message: "Invalid status",
       });
     }
 
     const ticket = await Ticket.findById(id);
 
     if (!ticket) {
-      return res.status(404).json({ message: "Ticket not found" });
+      return res.status(404).json({
+        message: "Ticket not found",
+      });
     }
 
     // 🔐 Only assigned user can update
     if (ticket.assignedTo.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not allowed" });
+      return res.status(403).json({
+        message: "Not allowed",
+      });
     }
 
-    /* ================= STATUS RULES ================= */
+    // ================= STATUS RULES =================
 
-    // ❌ prevent re-processing
     if (ticket.status === "closed") {
       return res.status(400).json({
-        message: "Ticket already closed"
+        message: "Ticket already closed",
       });
     }
 
-    // ❌ accept only if open
     if (status === "accepted" && ticket.status !== "open") {
       return res.status(400).json({
-        message: "Only open tickets can be accepted"
+        message: "Only open tickets can be accepted",
       });
     }
 
-    // ❌ close only if accepted or in_progress
     if (
       status === "closed" &&
       !["accepted", "in_progress"].includes(ticket.status)
     ) {
       return res.status(400).json({
-        message: "Ticket must be accepted or in progress to close"
+        message: "Ticket must be accepted or in progress to close",
       });
     }
-
-    /* ================= UPDATE TICKET ================= */
-
-    ticket.status = status;
-
-    if (status === "accepted") {
-      ticket.chatEnabled = true;
-    }
-
-    await ticket.save();
-
-    /* ================= HANDLE CHAT ONLY ON ACCEPT ================= */
 
     let chat = null;
 
+    // ================= CHAT LOGIC =================
     if (status === "accepted") {
       chat = await Chat.findOne({
         type: "ticket",
-        ticket: ticket._id
+        ticket: ticket._id,
       });
 
+      // 🔥 Create chat if not exists
       if (!chat) {
         chat = await Chat.create({
           type: "ticket",
           participants: [ticket.createdBy, ticket.assignedTo],
-          ticket: ticket._id
+          ticket: ticket._id,
         });
 
         const message = await Message.create({
@@ -355,27 +454,57 @@ exports.updateTicketStatus = async (req, res) => {
           sender: ticket.createdBy,
           text: ticket.description,
           attachments: ticket.attachments || [],
-          seenBy: [ticket.createdBy]
+          seenBy: [ticket.createdBy],
         });
 
         chat.lastMessage = message._id;
         await chat.save();
       }
+
+      // ================= ATOMIC UPDATE =================
+      const updatedTicket = await Ticket.findByIdAndUpdate(
+        ticket._id,
+        {
+          status: "accepted",
+          chatEnabled: true,
+          chatId: chat._id, // 🔥 GUARANTEED SAVE
+        },
+        { new: true }
+      );
+
+      return res.json({
+        success: true,
+        message: "Ticket accepted and chat started",
+        data: {
+          ticketId: updatedTicket._id,
+          chatId: updatedTicket.chatId,
+        },
+      });
     }
 
-    res.json({
+    // ================= CLOSE TICKET =================
+    const updatedTicket = await Ticket.findByIdAndUpdate(
+      ticket._id,
+      {
+        status: "closed",
+      },
+      { new: true }
+    );
+
+    return res.json({
       success: true,
-      message:
-        status === "accepted"
-          ? "Ticket accepted and chat started"
-          : "Ticket closed successfully",
+      message: "Ticket closed successfully",
       data: {
-        ticketId: ticket._id,
-        chatId: chat?._id || null
-      }
+        ticketId: updatedTicket._id,
+        chatId: updatedTicket.chatId || null,
+      },
     });
 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("updateTicketStatus error:", err);
+    return res.status(500).json({
+      message: err.message,
+    });
   }
 };
+

@@ -8,7 +8,6 @@ module.exports = async (socket, next) => {
   try {
     // 1. Get token from client
     const token = socket.handshake.auth?.token;
-
     if (!token) {
       return next(new Error("Unauthorized: No token"));
     }

@@ -23,7 +23,10 @@ const ticketSchema = new mongoose.Schema({
     ref: "User",
     required: true
   },
-
+  chatId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Chat",
+  },
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",

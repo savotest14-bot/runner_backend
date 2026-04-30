@@ -3,7 +3,7 @@ const Group = require("../models/group");
 const User = require("../models/user");
 const Message = require("../models/Message");
 const Ticket = require("../models/Ticket");
-
+const mongoose = require("mongoose");
 const { canDirectChat } = require("../utils/chatPermission");
 const checkIsGroupAdmin = require("../utils/checkIsGroupAdmin");
 const { getIO } = require("../sockets/socketInstance");
@@ -420,33 +420,166 @@ exports.getMessages = async (req, res) => {
 };
 
 
+// exports.getChatList = async (req, res) => {
+//   try {
+//     const userId = req.user._id.toString();
+
+//     /* ================= QUERY ================= */
+
+//     const chats = await Chat.find({
+//       $or: [
+//         // ✅ Direct + Ticket chats (participants-based)
+//         { participants: req.user._id },
+
+//         // ✅ Group chats (must belong to group)
+//         {
+//           type: "group",
+//           group: { $ne: null }
+//         }
+//       ]
+//     })
+//       .populate("participants", "firstName lastName profilePic")
+//       .populate("group", "name members") // 🔥 include members
+//       .populate("ticket", "title status createdBy assignedTo")
+//       .populate({
+//         path: "lastMessage",
+//         populate: {
+//           path: "sender",
+//           select: "firstName lastName profilePic"
+//         }
+//       })
+//       .sort({ updatedAt: -1 })
+//       .lean();
+
+//     /* ================= FILTER ================= */
+
+//     const filteredChats = chats.filter(chat => {
+
+//       /* ===== DIRECT ===== */
+//       if (chat.type === "direct") {
+//         return chat.participants.some(
+//           p => p._id.toString() === userId
+//         );
+//       }
+
+//       /* ===== GROUP (🔥 STRICT FIX) ===== */
+//       if (chat.type === "group") {
+//         if (!chat.group) return false;
+
+//         const isMember = chat.group.members?.some(
+//           m => m.user.toString() === userId
+//         );
+
+//         return isMember;
+//       }
+
+//       /* ===== TICKET (🔥 STRICT FIX) ===== */
+//       if (chat.type === "ticket") {
+//         if (!chat.ticket) return false;
+
+//         const isParticipant = chat.participants.some(
+//           p => p._id.toString() === userId
+//         );
+
+//         if (!isParticipant) return false;
+
+//         // only active tickets
+//         return ["accepted", "in_progress"].includes(chat.ticket.status);
+//       }
+
+//       return false;
+//     });
+
+//     /* ================= RESULT ================= */
+
+//     const result = filteredChats.map(chat => {
+
+//       const unreadCount = chat.unreadCount?.[userId] || 0;
+
+//       let chatName = "";
+//       let chatImage = null;
+
+//       if (chat.type === "direct") {
+//         const other = chat.participants.find(
+//           p => p._id.toString() !== userId
+//         );
+
+//         chatName = `${other?.firstName || ""} ${other?.lastName || ""}`;
+//         chatImage = other?.profilePic || null;
+//       }
+
+//       if (chat.type === "group") {
+//         chatName = chat.group?.name || "Group";
+//       }
+
+//       if (chat.type === "ticket") {
+//         chatName = `🎫 ${chat.ticket?.title || "Ticket"}`;
+//       }
+
+//       return {
+//         _id: chat._id,
+//         type: chat.type,
+//         chatName,
+//         chatImage,
+//         lastMessage: chat.lastMessage,
+//         unreadCount,
+//         updatedAt: chat.updatedAt
+//       };
+//     });
+
+//     res.json({
+//       success: true,
+//       data: result
+//     });
+
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// };
+
+
+
 exports.getChatList = async (req, res) => {
   try {
     const userId = req.user._id.toString();
 
-    /* ================= QUERY ================= */
+    const { type, ticketId } = req.query;
 
-    const chats = await Chat.find({
-      $or: [
-        // ✅ Direct + Ticket chats (participants-based)
-        { participants: req.user._id },
+    /* ================= QUERY BUILD ================= */
 
-        // ✅ Group chats (must belong to group)
-        {
-          type: "group",
-          group: { $ne: null }
-        }
-      ]
-    })
+    const baseQuery = {};
+
+    // ✅ TYPE FILTER
+    if (type) {
+      baseQuery.type = type;
+    }
+
+    // ✅ TICKET ID FILTER
+    if (ticketId && mongoose.Types.ObjectId.isValid(ticketId)) {
+      baseQuery.ticket = ticketId;
+    }
+
+    // ✅ ACCESS CONTROL
+    baseQuery.$or = [
+      { participants: req.user._id }, // direct + ticket
+      {
+        type: "group",
+        group: { $ne: null },
+      },
+    ];
+
+    /* ================= FETCH ================= */
+
+    const chats = await Chat.find(baseQuery)
       .populate("participants", "firstName lastName profilePic")
-      .populate("group", "name members") // 🔥 include members
+      .populate("group", "name members")
       .populate("ticket", "title status createdBy assignedTo")
       .populate({
         path: "lastMessage",
         populate: {
           path: "sender",
-          select: "firstName lastName profilePic"
-        }
+          select: "firstName lastName profilePic",
+        },
       })
       .sort({ updatedAt: -1 })
       .lean();
@@ -455,25 +588,20 @@ exports.getChatList = async (req, res) => {
 
     const filteredChats = chats.filter(chat => {
 
-      /* ===== DIRECT ===== */
       if (chat.type === "direct") {
         return chat.participants.some(
           p => p._id.toString() === userId
         );
       }
 
-      /* ===== GROUP (🔥 STRICT FIX) ===== */
       if (chat.type === "group") {
         if (!chat.group) return false;
 
-        const isMember = chat.group.members?.some(
+        return chat.group.members?.some(
           m => m.user.toString() === userId
         );
-
-        return isMember;
       }
 
-      /* ===== TICKET (🔥 STRICT FIX) ===== */
       if (chat.type === "ticket") {
         if (!chat.ticket) return false;
 
@@ -483,7 +611,6 @@ exports.getChatList = async (req, res) => {
 
         if (!isParticipant) return false;
 
-        // only active tickets
         return ["accepted", "in_progress"].includes(chat.ticket.status);
       }
 
@@ -493,7 +620,6 @@ exports.getChatList = async (req, res) => {
     /* ================= RESULT ================= */
 
     const result = filteredChats.map(chat => {
-
       const unreadCount = chat.unreadCount?.[userId] || 0;
 
       let chatName = "";
@@ -523,13 +649,13 @@ exports.getChatList = async (req, res) => {
         chatImage,
         lastMessage: chat.lastMessage,
         unreadCount,
-        updatedAt: chat.updatedAt
+        updatedAt: chat.updatedAt,
       };
     });
 
     res.json({
       success: true,
-      data: result
+      data: result,
     });
 
   } catch (err) {

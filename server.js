@@ -47,7 +47,7 @@ app.use("/api/chat", require("./routes/chat"));
 const startServer = async () => {
   await connectDBAndSeed();
 
-  const PORT = process.env.PORT || 5000;
+  const PORT = process.env.PORT || 5004;
 
   // ✅ create HTTP server
   const server = http.createServer(app);

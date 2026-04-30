@@ -36,6 +36,8 @@ const {
   updateCompanyStatus,
   getAllEmployeesforAssign,
   searchCompanies,
+  getSuperAdminDashboard,
+  getEmployeePayments,
 } = require("../controllers/admin.controller");
 
 const {
@@ -236,5 +238,9 @@ router.get("/getEmployee/:employeeId", authenticate, getEmployeeById);
 
 router.put("/assignUsers/:subTaskId", authenticate, assignUsersToSubTask);
 router.put("/removeUsers/:subTaskId", authenticate, removeUsersFromSubTask);
+
+router.get("/getSuperAdminDashboard", authenticate, getSuperAdminDashboard);
+
+router.get("/getEmployeePayments", authenticate, getEmployeePayments)
 
 module.exports = router;

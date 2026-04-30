@@ -11,6 +11,10 @@ const Client = require("../models/client");
 const Property = require("../models/property");
 const Role = require("../models/role");
 const { generateRandomPassword } = require("../functions/password");
+const Invoice = require("../models/Invoice");
+const Contract = require("../models/contract")
+const SubTask = require("../models/subtask");
+const EmployeePayment = require("../models/EmployeePayment");
 
 exports.adminCreateCompany = async (req, res) => {
   try {
@@ -645,6 +649,7 @@ exports.getCompanyById = async (req, res) => {
       });
     }
 
+    // ================= COMPANY =================
     const company = await Company.findOne({
       _id: companyId,
       isDeleted: false,
@@ -659,6 +664,56 @@ exports.getCompanyById = async (req, res) => {
       });
     }
 
+    // ================= STATS =================
+
+    const totalEmployees = await User.countDocuments({
+      company: companyId,
+      isDeleted: false,
+    });
+    const totalSubTasks = await SubTask.countDocuments({
+      company: companyId,
+    });
+    const totalTasks = await Task.countDocuments({
+      company: companyId,
+    });
+
+    const totalContracts = await Contract.countDocuments({
+      company: companyId,
+    });
+
+    const totalInvoicesAgg = await Invoice.aggregate([
+      {
+        $match: { company: new mongoose.Types.ObjectId(companyId) },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+        },
+      },
+    ]);
+
+    const totalEarning = totalInvoicesAgg[0]?.total || 0;
+
+    const totalPaidAgg = await Invoice.aggregate([
+      {
+        $match: {
+          company: new mongoose.Types.ObjectId(companyId),
+          status: "paid",
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$paidAmount" },
+        },
+      },
+    ]);
+
+    const netProfit = totalPaidAgg[0]?.total || 0;
+
+    // ================= DOCUMENT URL FIX =================
+
     const baseUrl = `${req.protocol}://${req.get("host")}`;
 
     if (company.licenseDocuments?.length) {
@@ -668,10 +723,35 @@ exports.getCompanyById = async (req, res) => {
       }));
     }
 
+    // ================= RESPONSE =================
+
     return res.status(200).json({
-      message: "Company fetched successfully",
-      data: company,
+      success: true,
+      data: {
+        cards: {
+          totalEarning,
+          totalTasks,
+          totalSubTasks,
+          totalEmployees,
+          totalContracts,
+          netProfit,
+        },
+        subscription: {
+          plan: company.planId?.planName,
+          monthlyFee: company.planId?.monthlyFee,
+          annualFee: company.planId?.annualFee,
+          status: company.subscriptionStatus,
+          startDate: company.subscriptionStartDate,
+          renewalDate: company.subscriptionEndDate,
+        },
+
+        documents: company.licenseDocuments || [],
+        
+        createdBy: company.createdBy,
+        company:company
+      },
     });
+
   } catch (error) {
     console.error("Get company by id error:", error);
     return res.status(500).json({
@@ -3085,3 +3165,323 @@ exports.updateEmployee = async (req, res) => {
     });
   }
 };
+
+
+exports.getSuperAdminDashboard = async (req, res) => {
+  try {
+    /* ================= BASIC COUNTS ================= */
+
+    const totalCompanies = await Company.countDocuments({
+      isDeleted: false,
+    });
+
+    const totalEmployees = await User.countDocuments({
+      isDeleted: false,
+    });
+
+    const totalContracts = await Contract.countDocuments();
+
+    const totalTasks = await Task.countDocuments();
+
+    /* ================= FINANCIAL ================= */
+
+    // ✅ TOTAL EARNING (ONLY FULLY PAID)
+    const earningAgg = await Invoice.aggregate([
+      {
+        $match: {
+          remainingAmount: 0, // 🔥 fully paid
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+        },
+      },
+    ]);
+
+    const totalIncome = earningAgg[0]?.total || 0;
+
+    // ⏳ PENDING AMOUNT
+    const pendingAgg = await Invoice.aggregate([
+      {
+        $match: {
+          remainingAmount: { $gt: 0 }, // 🔥 pending invoices
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$remainingAmount" },
+        },
+      },
+    ]);
+
+    const pendingAmount = pendingAgg[0]?.total || 0;
+
+    // 💸 EXPENSE
+    const expenseAgg = await EmployeePayment.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+        },
+      },
+    ]);
+
+    const totalExpense = expenseAgg[0]?.total || 0;
+
+    const netProfit = totalIncome - totalExpense;
+
+    /* ================= MONTHLY GRAPH ================= */
+
+    // ✅ Monthly Earning (only paid)
+    const monthlyIncome = await Invoice.aggregate([
+      {
+        $match: {
+          remainingAmount: 0,
+        },
+      },
+      {
+        $group: {
+          _id: { $month: "$createdAt" },
+          total: { $sum: "$amount" },
+        },
+      },
+      { $sort: { "_id": 1 } },
+    ]);
+
+    // ⏳ Monthly Pending
+    const monthlyPending = await Invoice.aggregate([
+      {
+        $match: {
+          remainingAmount: { $gt: 0 },
+        },
+      },
+      {
+        $group: {
+          _id: { $month: "$createdAt" },
+          total: { $sum: "$remainingAmount" },
+        },
+      },
+      { $sort: { "_id": 1 } },
+    ]);
+
+    // 💸 Monthly Expense
+    const monthlyExpense = await EmployeePayment.aggregate([
+      {
+        $group: {
+          _id: { $month: "$createdAt" },
+          total: { $sum: "$amount" },
+        },
+      },
+      { $sort: { "_id": 1 } },
+    ]);
+
+    /* ================= TASK TREND ================= */
+
+    const taskTrend = await Task.aggregate([
+      {
+        $group: {
+          _id: { $year: "$createdAt" },
+          total: { $sum: 1 },
+        },
+      },
+      { $sort: { "_id": 1 } },
+    ]);
+
+    /* ================= RESPONSE ================= */
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        cards: {
+          totalContracts,
+          totalCompanies,
+          totalEmployees,
+          totalTasks,
+
+          totalIncome,     // ✅ only paid
+          pendingAmount,   // 🔥 NEW FIELD
+          totalExpense,
+          netProfit,
+        },
+
+        charts: {
+          monthlyIncome,   // paid
+          monthlyPending,  // 🔥 NEW
+          monthlyExpense,
+          taskTrend,
+        },
+      },
+    });
+
+  } catch (error) {
+    console.error("Super admin dashboard error:", error);
+    return res.status(500).json({
+      message: "Failed to load dashboard",
+    });
+  }
+};
+
+
+exports.getEmployeePayments = async (req, res) => {
+  try {
+    const { role, company } = req.user;
+
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      employeeId,
+      startDate,
+      endDate,
+      groupByEmployee,
+    } = req.query;
+
+    const skip = (page - 1) * limit;
+
+    /* ================= QUERY ================= */
+
+    const query = {};
+
+    // 🔐 Role filter
+    if (role.name !== "superAdmin") {
+      query.company = company;
+    }
+
+    // 🔍 Filters
+    if (status) {
+      query.status = status;
+    }
+
+    if (employeeId && mongoose.Types.ObjectId.isValid(employeeId)) {
+      query.employee = new mongoose.Types.ObjectId(employeeId);
+    }
+
+    // 📅 Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.createdAt.$lte = new Date(endDate);
+      }
+    }
+
+    /* ================= SUMMARY ================= */
+
+    const summaryAgg = await EmployeePayment.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: "$amount" },
+          totalPaid: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "paid"] }, "$amount", 0],
+            },
+          },
+          totalPending: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "pending"] }, "$amount", 0],
+            },
+          },
+        },
+      },
+    ]);
+
+    const summary = summaryAgg[0] || {
+      totalAmount: 0,
+      totalPaid: 0,
+      totalPending: 0,
+    };
+
+    /* ================= GROUP BY EMPLOYEE ================= */
+
+    let employeeSummary = [];
+
+    if (groupByEmployee === "true") {
+      employeeSummary = await EmployeePayment.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: "$employee",
+            totalAmount: { $sum: "$amount" },
+            totalTasks: { $sum: "$totalTasks" },
+            totalTime: { $sum: "$totalTimeSeconds" },
+          },
+        },
+        {
+          $lookup: {
+            from: "users",
+            localField: "_id",
+            foreignField: "_id",
+            as: "employee",
+          },
+        },
+        { $unwind: "$employee" },
+        {
+          $project: {
+            employeeId: "$employee._id",
+            name: {
+              $concat: [
+                "$employee.firstName",
+                " ",
+                "$employee.lastName",
+              ],
+            },
+            totalAmount: 1,
+            totalTasks: 1,
+            totalTime: 1,
+          },
+        },
+        { $sort: { totalAmount: -1 } },
+      ]);
+    }
+
+    /* ================= LIST ================= */
+
+    const [payments, total] = await Promise.all([
+      EmployeePayment.find(query)
+        .populate("employee", "firstName lastName profilePic")
+        .populate("contract", "contractNumber")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+
+      EmployeePayment.countDocuments(query),
+    ]);
+
+    /* ================= RESPONSE ================= */
+
+    return res.status(200).json({
+      success: true,
+
+      summary, // 💰 payout summary
+
+      employeeSummary, // 📊 grouping (optional)
+
+      data: payments,
+
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+
+  } catch (error) {
+    console.error("getEmployeePayments error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch employee payments",
+    });
+  }
+};
+
+
+
+

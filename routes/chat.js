@@ -8,6 +8,6 @@ const { initChat, sendMessage, getMessages, getChatList } = require("../controll
 router.post("/initChat", authenticate, initChat);
 router.post("/sendMessage", authenticate, uploads.array("chatFile", 5), sendMessage);
 router.get("/getMessages/:chatId", authenticate, getMessages);
-router.get("/getChatList", authenticate, getChatList)
+router.get("/getChatList", authenticate, getChatList);
 
 module.exports = router;

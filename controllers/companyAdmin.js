@@ -164,6 +164,7 @@ exports.getAllPropertiesForCompanyAdmin = async (req, res) => {
           sizeSqm: property.sizeSqm,
           noOfResidents: property.noOfResidents,
           specialFeatureEndDate: property.specialFeatureEndDate,
+          location:property.location,
 
           client: {
             _id: client._id,
