@@ -27,9 +27,9 @@ const subTaskSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    subtaskPrice:{
-      type:Number,
-      default:0
+    subtaskPrice: {
+      type: Number,
+      default: 0
     },
     // ✅ ACTUAL TIMER
     timerStartedAt: Date,
@@ -72,18 +72,64 @@ const subTaskSchema = new mongoose.Schema(
         },
       },
     ],
-     afterWorkImagesdescription: {
-          type: String,
-          trim: true,
-          default: "",
-        },
+    afterWorkImagesdescription: {
+      type: String,
+      trim: true,
+      default: "",
+    },
 
     status: {
       type: String,
       enum: ["pending", "in_progress", "completed"],
       default: "pending",
     },
+    comments: {
+      type: [
+        {
+          text: {
+            type: String,
+            required: true,
+            trim: true,
+          },
 
+          createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true,
+          },
+
+          createdAt: {
+            type: Date,
+            default: Date.now,
+          },
+
+          replies: {
+            type: [
+              {
+                text: {
+                  type: String,
+                  required: true,
+                  trim: true,
+                },
+
+                createdBy: {
+                  type: mongoose.Schema.Types.ObjectId,
+                  ref: "User",
+                  required: true,
+                },
+
+                createdAt: {
+                  type: Date,
+                  default: Date.now,
+                },
+              },
+            ],
+            default: [], // ✅ IMPORTANT (you missed this)
+          },
+        },
+      ],
+      default: [], // ✅ already correct
+    },
     company: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",

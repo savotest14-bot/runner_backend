@@ -1506,3 +1506,88 @@ exports.getEmployeeDashboard = async (req, res) => {
         });
     }
 };
+
+exports.addComment = async (req, res) => {
+    try {
+        const { subTaskId } = req.params;
+        const { text } = req.body;
+
+        const subTask = await SubTask.findById(subTaskId);
+
+        if (!subTask) {
+            return res.status(404).json({ message: "SubTask not found" });
+        }
+
+        // ✅ COMPANY CHECK (IMPORTANT)
+        if (subTask.company.toString() !== req.user.company.toString()) {
+            return res.status(403).json({
+                message: "You are not allowed to comment on this subtask",
+            });
+        }
+
+        // ✅ Ensure comments array exists
+        if (!subTask.comments) {
+            subTask.comments = [];
+        }
+
+        subTask.comments.push({
+            text,
+            createdBy: req.user._id,
+        });
+
+        await subTask.save();
+
+        res.json({ message: "Comment added successfully", subTask });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+exports.addReply = async (req, res) => {
+  try {
+    const { subTaskId, commentId } = req.params;
+    const { text } = req.body;
+
+    if (!req.user.company) {
+      return res.status(400).json({ message: "User company not found" });
+    }
+
+    const subTask = await SubTask.findById(subTaskId).select("company comments");
+
+    if (!subTask) {
+      return res.status(404).json({ message: "SubTask not found" });
+    }
+
+    if (!subTask.company.equals(req.user.company)) {
+      return res.status(403).json({
+        message: "You are not allowed to reply on this subtask",
+      });
+    }
+
+    if (!subTask.comments || subTask.comments.length === 0) {
+      return res.status(404).json({ message: "No comments found" });
+    }
+
+    const comment = subTask.comments.id(commentId);
+
+    if (!comment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    // ✅ Ensure replies array exists
+    if (!comment.replies) {
+      comment.replies = [];
+    }
+
+    comment.replies.push({
+      text,
+      createdBy: req.user._id,
+    });
+
+    await subTask.save();
+
+    res.json({ message: "Reply added successfully", subTask });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

@@ -474,7 +474,7 @@ const generateWorkReport = async (taskId, session) => {
         completedSubTasks,
         status: "draft",      // ✅ important
         isEditable: true,     // ✅ important
-        reviewStatus:"pending"
+        reviewStatus: "pending"
       },
     ],
     { session }
@@ -609,7 +609,8 @@ exports.getMySubTasks = async (req, res) => {
         select: "taskName taskCategory taskSubCategory taskPrice status",
       })
       .populate("assignedBy", "firstName lastName email")
-
+      .populate("comments.createdBy", "firstName lastName profilePic")
+      .populate("comments.replies.createdBy", "firstName lastName profilePic")
       .sort({ createdAt: -1 })
       .skip(Number(skip))
       .limit(Number(limit))

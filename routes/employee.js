@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const authenticate = require("../middlewares/authenticate");
 const { uploadEmployeeImages } = require("../middlewares/employeeUploads");
-const { createEmployee, getAllEmployees, getEmployeeById, updateEmployee, toggleEmployeeDeleteByCompanyAdmin, getProfileForEmployee, updateEmployeeProfile, getEmployeeFinancial, getEmployeeDashboard } = require("../controllers/employee");
+const { createEmployee, getAllEmployees, getEmployeeById, updateEmployee, toggleEmployeeDeleteByCompanyAdmin, getProfileForEmployee, updateEmployeeProfile, getEmployeeFinancial, getEmployeeDashboard, addComment, addReply } = require("../controllers/employee");
 const authorize = require("../middlewares/authorize");
 const { getMySubTasks, startSubTaskTimer, stopSubTaskTimer, uploadBeforeWorkImage, uploadAfterWorkImage, checkGeoFence } = require("../controllers/task");
 const { uploads } = require("../utils/upload")
@@ -65,5 +65,9 @@ router.patch("/uploadAfterWorkImage/:subTaskId", authenticate, uploads.array("wo
 router.get("/getEmployeeFinancial", authenticate, getEmployeeFinancial);
 
 router.get("/getEmployeeDashboard", authenticate, getEmployeeDashboard);
+
+router.patch("/addComment/:subTaskId", authenticate, addComment)
+
+router.patch("/addReply/:subTaskId/:commentId", authenticate, addReply)
 
 module.exports = router;

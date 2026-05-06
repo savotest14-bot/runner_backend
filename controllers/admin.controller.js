@@ -2934,7 +2934,7 @@ exports.createRunnerEmployee = async (req, res) => {
     }
 
     const { firstName, lastName, email, phone, gender } = req.body;
-    console.log("req.body", req.body);
+    // console.log("req.body", req.body);
     if (!firstName || !email || !phone) {
       return res.status(400).json({
         message: "Missing firstName or email or phone or required fields",
