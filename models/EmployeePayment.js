@@ -22,7 +22,20 @@ const employeePaymentSchema = new mongoose.Schema(
         paymentType: String,
         totalTimeSeconds: Number,
         totalTasks: Number,
-        amount: Number,
+        salaryAmount: {
+            type: Number,
+            default: 0,
+        },
+
+        expenseAmount: {
+            type: Number,
+            default: 0,
+        },
+
+        totalAmount: {
+            type: Number,
+            default: 0,
+        },
 
         status: {
             type: String,

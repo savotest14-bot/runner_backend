@@ -1591,3 +1591,115 @@ exports.addReply = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+exports.addExpense = async (req, res) => {
+  try {
+    const { subTaskId } = req.body;
+
+    const companyId = req.user.company;
+    const userId = req.user._id;
+
+    const {
+      title,
+      description,
+      amount,
+    } = req.body;
+
+    // =========================
+    // VALIDATION
+    // =========================
+    if (!mongoose.Types.ObjectId.isValid(subTaskId)) {
+      return res.status(400).json({
+        success: false,
+        messageKey: "errors.invalidSubTaskId",
+      });
+    }
+
+    if (!title || !amount) {
+      return res.status(400).json({
+        success: false,
+        messageKey: "errors.titleAndAmountRequired",
+      });
+    }
+
+    // =========================
+    // FIND SUBTASK
+    // =========================
+    const subTask = await SubTask.findById(subTaskId);
+
+    if (!subTask) {
+      return res.status(404).json({
+        success: false,
+        messageKey: "errors.subTaskNotFound",
+      });
+    }
+
+    // =========================
+    // COMPANY CHECK
+    // =========================
+    if (subTask.company.toString() !== companyId.toString()) {
+      return res.status(403).json({
+        success: false,
+        messageKey: "errors.companyMismatch",
+      });
+    }
+
+    // =========================
+    // CHECK USER ASSIGNED
+    // =========================
+    const isAssigned = subTask.assignedTo.some(
+      (assignedUserId) =>
+        assignedUserId.toString() === userId.toString()
+    );
+
+    if (!isAssigned) {
+      return res.status(403).json({
+        success: false,
+        messageKey: "errors.userNotAssignedToSubTask",
+      });
+    }
+
+    // =========================
+    // IMAGE
+    // =========================
+    let receiptImage = "";
+    if (req.file) {
+      receiptImage = `uploads/expenseImage/${req.file.filename}`;
+    }
+
+    // =========================
+    // ADD EXPENSE
+    // =========================
+    subTask.extraExpenses.push({
+      title,
+      description,
+      amount,
+      receiptImage,
+
+      addedBy: userId,
+
+      status: "pending",
+    });
+
+    await subTask.save();
+
+    return res.status(200).json({
+      success: true,
+      messageKey: "success.expenseAddedSuccessfully",
+
+      data:
+        subTask.extraExpenses[
+          subTask.extraExpenses.length - 1
+        ],
+    });
+
+  } catch (error) {
+    console.log("ADD EXPENSE ERROR => ", error);
+
+    return res.status(500).json({
+      success: false,
+      messageKey: "errors.failedToAddExpense",
+      error: error.message,
+    });
+  }
+};

@@ -24,7 +24,10 @@ const employeeSalarySchema = new mongoose.Schema(
 
     // 💰 Earnings (from EmployeePayment)
     grossAmount: { type: Number, default: 0 },
-
+    expenseAmount: {
+      type: Number,
+      default: 0,
+    },
     // ➕ Bonus
     bonus: { type: Number, default: 0 },
 

@@ -21,6 +21,16 @@ const invoiceSchema = new mongoose.Schema(
     },
 
     // 💰 FINAL AMOUNT (single source of truth)
+    serviceAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    expenseAmount: {
+      type: Number,
+      default: 0,
+    },
+
     amount: {
       type: Number,
       required: true,
@@ -70,18 +80,33 @@ const invoiceSchema = new mongoose.Schema(
 
 // 🔥 AUTO CALCULATE REMAINING
 invoiceSchema.pre("save", function () {
-  this.remainingAmount = this.amount - this.paidAmount;
+
+  // 🔥 FINAL TOTAL
+  this.amount =
+    (this.serviceAmount || 0) +
+    (this.expenseAmount || 0);
+
+  // 🔥 REMAINING
+  this.remainingAmount =
+    this.amount - this.paidAmount;
 
   if (this.paidAmount === 0) {
-    this.status = this.status === "draft" ? "draft" : "sent";
+    this.status =
+      this.status === "draft"
+        ? "draft"
+        : "sent";
+
   } else if (this.paidAmount < this.amount) {
+
     this.status = "partially_paid";
+
   } else if (this.paidAmount >= this.amount) {
+
     this.status = "paid";
     this.paidAt = new Date();
   }
 
-  // 🔥 NEW: overdue logic
+  // 🔥 OVERDUE
   if (
     this.status !== "paid" &&
     this.dueDate &&

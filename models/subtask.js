@@ -43,6 +43,66 @@ const subTaskSchema = new mongoose.Schema(
       default: 0,
     },
 
+    extraExpenses: [
+      {
+        title: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+
+        description: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+
+        amount: {
+          type: Number,
+          required: true,
+          min: 0,
+        },
+
+        receiptImage: {
+          type: String,
+          default: "",
+        },
+
+        addedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+
+        status: {
+          type: String,
+          enum: ["pending", "approved", "rejected"],
+          default: "pending",
+        },
+
+        approvedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+
+        approvedAt: {
+          type: Date,
+          default: null,
+        },
+
+        rejectionReason: {
+          type: String,
+          default: "",
+        },
+
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
     // 📸 IMAGES
     beforeWorkImages: [
       {

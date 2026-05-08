@@ -123,6 +123,7 @@ exports.initChat = async (req, res) => {
   }
 };
 
+
 exports.sendMessage = async (req, res) => {
   try {
     const io = getIO();

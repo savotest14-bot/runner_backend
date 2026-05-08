@@ -39,6 +39,13 @@ const {
   getSuperAdminDashboard,
   getEmployeePayments,
   getAllDocuments,
+  getEligibleUsersForGroup,
+  getAvailableContracts,
+  getAvailableTasks,
+  suggestMembers,
+  createGroup,
+  getAllGroups,
+  getGroupDetails,
 } = require("../controllers/admin.controller");
 
 const {
@@ -247,6 +254,20 @@ router.get("/getSuperAdminDashboard", authenticate, getSuperAdminDashboard);
 
 router.get("/getEmployeePayments", authenticate, getEmployeePayments);
 
-router.get("/getAllDocuments", authenticate, getAllDocuments)
+router.get("/getAllDocuments", authenticate, getAllDocuments);
+
+router.get("/eligible-users/:companyId", authenticate, authorize("view_group"), getEligibleUsersForGroup);
+
+
+router.get("/getAvailableContracts/:companyId", authenticate, authorize("view_group"), getAvailableContracts);
+
+router.get("/getAvailableTasks/:companyId", authenticate, authorize("view_group"), getAvailableTasks);
+
+router.get("/suggestMembers/:companyId", authenticate, authorize("view_group"), suggestMembers);
+
+router.post("/createGroup", authenticate, authorize("create_group"), createGroup);
+router.get("/getAllGroups", authenticate, authorize("view_group"), getAllGroups)
+
+router.get("/getGroupDetails/:groupId", authenticate, authorize("view_group"), getGroupDetails);
 
 module.exports = router;

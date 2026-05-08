@@ -16,10 +16,6 @@ const taskSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-
-    // ❌ REMOVE TIMER FROM TASK
-    // ❌ REMOVE assignedTo
-
     status: {
       type: String,
       enum: ["pending", "in_progress", "completed"],

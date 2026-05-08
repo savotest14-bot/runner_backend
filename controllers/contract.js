@@ -370,7 +370,19 @@ exports.getAllContracts = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const contracts = await Contract.find({ isDeleted: false })
+    const { status } = req.query;
+
+    // Build filter
+    const filter = {
+      isDeleted: false,
+    };
+
+    // Add status filter if provided
+    if (status) {
+      filter.status = status;
+    }
+
+    const contracts = await Contract.find(filter)
       .populate("client", "name email city clientLogo")
       .populate("property", "propertyName")
       .populate("company", "companyName")
@@ -381,7 +393,7 @@ exports.getAllContracts = async (req, res) => {
       if (contract.client?.clientLogo) {
         contract.client.clientLogo = getFileUrl(
           req,
-          contract.client.clientLogo,
+          contract.client.clientLogo
         );
       }
 
@@ -390,7 +402,7 @@ exports.getAllContracts = async (req, res) => {
           (doc) => ({
             ...doc,
             fileUrl: getFileUrl(req, doc.fileUrl),
-          }),
+          })
         );
       }
 

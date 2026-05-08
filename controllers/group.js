@@ -16,9 +16,9 @@ const WorkReport = require("../models/WorkReport");
 
 exports.getEligibleUsersForGroup = async (req, res) => {
   try {
-    if (req.user.role.name !== "company_admin") {
+   if (req.user.role.name !== "company_admin") {
       return res.status(403).json({
-        message: "Only company_admin can access this route",
+        messageKey: "errors.onlyCompanyAdminAllowed",
       });
     }
 
@@ -87,7 +87,7 @@ exports.getEligibleUsersForGroup = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({
-      message: "Failed to fetch users",
+      messageKey : "FailedToFetchUsers",
     });
   }
 };
@@ -96,28 +96,52 @@ exports.getAvailableContracts = async (req, res) => {
   try {
     if (req.user.role.name !== "company_admin") {
       return res.status(403).json({
-        message: "Only company_admin can access this route",
+        messageKey: "errors.onlyCompanyAdminAllowed",
       });
     }
 
     const search = req.query.search || "";
 
-    // ✅ 1. Get all contracts already assigned in groups
-    const groups = await Group.find({
+    /* =========================================================
+       1. CONTRACTS ALREADY ASSIGNED TO CONTRACT GROUP
+    ========================================================= */
+
+    const contractGroups = await Group.find({
       company: req.user.company,
       assignmentType: "CONTRACT",
       contract: { $ne: null },
+      isDeleted: false,
     }).select("contract");
 
-    const assignedContractIds = groups.map(g => g.contract.toString());
+    const assignedContractIds = contractGroups.map((g) =>
+      g.contract.toString()
+    );
 
-    // ✅ 2. Build filter
+    /* =========================================================
+       2. TASKS ALREADY ASSIGNED TO TASK GROUP
+    ========================================================= */
+
+    const taskGroups = await Group.find({
+      company: req.user.company,
+      assignmentType: "TASK",
+      task: { $ne: null },
+      isDeleted: false,
+    }).select("task");
+
+    const assignedTaskIds = new Set(
+      taskGroups.map((g) => g.task.toString())
+    );
+
+    /* =========================================================
+       3. FETCH CONTRACTS
+    ========================================================= */
+
     const filter = {
       company: req.user.company,
       isDeleted: false,
-      // clinetStatus:"accepted",
+      clinetStatus: "accepted",
 
-      // 🔥 exclude already assigned contracts
+      // exclude already assigned contracts
       _id: { $nin: assignedContractIds },
 
       ...(search && {
@@ -129,22 +153,50 @@ exports.getAvailableContracts = async (req, res) => {
       }),
     };
 
-    // ✅ 3. Fetch contracts
     const contracts = await Contract.find(filter)
       .populate("client", "name")
       .populate("property", "name")
+      .populate("tasks", "_id name")
       .sort({ createdAt: -1 })
       .lean();
 
+    /* =========================================================
+       4. KEEP ONLY CONTRACTS WITH REMAINING TASKS
+    ========================================================= */
+
+    const availableContracts = contracts.filter((contract) => {
+      if (!contract.tasks || !contract.tasks.length) {
+        return false;
+      }
+
+      // at least one task must be unassigned
+      const hasRemainingTask = contract.tasks.some(
+        (task) => !assignedTaskIds.has(task._id.toString())
+      );
+
+      return hasRemainingTask;
+    });
+
+    /* =========================================================
+       5. RESPONSE
+    ========================================================= */
+
+    if (!availableContracts.length) {
+      return res.status(400).json({
+        messageKey: "errors.noAvailableContracts",
+      });
+    }
+
     return res.status(200).json({
       message: "Available contracts fetched successfully",
-      data: contracts,
+      data: availableContracts,
     });
 
   } catch (error) {
     console.error(error);
+
     return res.status(500).json({
-      message: "Failed to fetch contracts",
+      messageKey: "errors.failedToFetchContracts",
     });
   }
 };
@@ -153,60 +205,97 @@ exports.getAvailableTasks = async (req, res) => {
   try {
     if (req.user.role.name !== "company_admin") {
       return res.status(403).json({
-        message: "Only company_admin can access this route",
+        messageKey: "errors.onlyCompanyAdminAllowed",
       });
     }
 
     const search = req.query.search || "";
     const { contractId } = req.query;
 
-    // ✅ 1. Build contract filter
+    /* =========================================================
+       1. BUILD CONTRACT FILTER
+    ========================================================= */
+
     let contractFilter = {
       company: req.user.company,
       isDeleted: false,
     };
 
     if (contractId) {
-      // 👉 If specific contract passed
+      // specific contract
       contractFilter._id = contractId;
-      // contractFilter.clinetStatus = "accepted";
     } else {
-      // 👉 Otherwise only accepted contracts
-      contractFilter.clinetStatus = "accepted"; // ⚠️ keep your field name
+      // only accepted contracts
+      contractFilter.clinetStatus = "accepted";
     }
 
-    const contracts = await Contract.find(contractFilter).select("tasks");
+    const contracts = await Contract.find(contractFilter)
+      .select("tasks")
+      .lean();
 
-    // ✅ 2. Extract task IDs
+    /* =========================================================
+       2. EXTRACT TASK IDS
+    ========================================================= */
+
     const allowedTaskIds = new Set();
-    contracts.forEach(c => {
-      c.tasks.forEach(t => allowedTaskIds.add(t.toString()));
+
+    contracts.forEach((contract) => {
+      if (contract.tasks?.length) {
+        contract.tasks.forEach((taskId) => {
+          allowedTaskIds.add(taskId.toString());
+        });
+      }
     });
 
-    // ❗ Edge case: no tasks
+    // no tasks available
     if (allowedTaskIds.size === 0) {
       return res.status(200).json({
-        message: "No tasks available",
+        messageKey: "errors.noAvailableTasks",
         data: [],
       });
     }
 
-    // ✅ 3. Get already assigned tasks
+    /* =========================================================
+       3. GET ALREADY ASSIGNED TASKS
+    ========================================================= */
+
     const groups = await Group.find({
       company: req.user.company,
       assignmentType: "TASK",
       task: { $ne: null },
+      isDeleted: false,
     }).select("task");
 
-    const assignedTaskIds = groups.map(g => g.task.toString());
-    // ✅ 4. Build filter
+    const assignedTaskIds = new Set(
+      groups.map((g) => g.task.toString())
+    );
+
+    /* =========================================================
+       4. FILTER ONLY UNASSIGNED TASKS
+    ========================================================= */
+
+    const finalTaskIds = Array.from(allowedTaskIds).filter(
+      (taskId) => !assignedTaskIds.has(taskId)
+    );
+
+    // all tasks already assigned
+    if (!finalTaskIds.length) {
+      return res.status(200).json({
+        messageKey: "errors.noAvailableTasks",
+        data: [],
+      });
+    }
+
+    /* =========================================================
+       5. BUILD TASK FILTER
+    ========================================================= */
+
     const filter = {
       company: req.user.company,
       isDeleted: false,
 
       _id: {
-        $in: Array.from(allowedTaskIds),
-        $nin: assignedTaskIds,
+        $in: finalTaskIds,
       },
 
       ...(search && {
@@ -218,9 +307,14 @@ exports.getAvailableTasks = async (req, res) => {
       }),
     };
 
-    // ✅ 5. Fetch tasks
+    /* =========================================================
+       6. FETCH TASKS
+    ========================================================= */
+
     const tasks = await Task.find(filter)
-      .select("taskName taskCategory taskSubCategory status taskPrice")
+      .select(
+        "taskName taskCategory taskSubCategory status taskPrice"
+      )
       .sort({ createdAt: -1 })
       .lean();
 
@@ -231,8 +325,9 @@ exports.getAvailableTasks = async (req, res) => {
 
   } catch (error) {
     console.error(error);
+
     return res.status(500).json({
-      message: "Failed to fetch tasks",
+      messageKey: "errors.failedToFetchTasks",
     });
   }
 };
@@ -241,7 +336,7 @@ exports.suggestMembers = async (req, res) => {
   try {
     if (req.user.role.name !== "company_admin") {
       return res.status(403).json({
-        message: "Only company_admin can access this route",
+        messageKey: "errors.onlyCompanyAdminAllowed",
       });
     }
 
@@ -313,7 +408,7 @@ exports.suggestMembers = async (req, res) => {
   } catch (error) {
     console.error("Suggest members error:", error);
     return res.status(500).json({
-      message: "Failed to fetch members",
+      messageKey: "errors.failedToFetchUsers",
     });
   }
 };
@@ -322,7 +417,7 @@ exports.createGroup = async (req, res) => {
   try {
     if (req.user.role.name !== "company_admin") {
       return res.status(403).json({
-        message: "Only company_admin can access this route",
+        messageKey: "errors.onlyCompanyAdminAllowed",
       });
     }
 
@@ -335,20 +430,26 @@ exports.createGroup = async (req, res) => {
       description = "",
     } = req.body;
 
-    // ✅ STEP 1: Basic validation
+    /* =========================================================
+       STEP 1: BASIC VALIDATION
+    ========================================================= */
+
     if (!name || !groupAdminId) {
       return res.status(400).json({
-        message: "Name and groupAdminId are required",
+        messageKey: "errors.nameAndGroupAdminRequired",
       });
     }
 
     if (contractIds.length === 0 && taskIds.length === 0) {
       return res.status(400).json({
-        message: "Either contractIds or taskIds is required",
+        messageKey: "errors.contractOrTaskRequired",
       });
     }
 
-    // ✅ STEP 2: Validate Admin
+    /* =========================================================
+       STEP 2: VALIDATE GROUP ADMIN
+    ========================================================= */
+
     const adminUser = await User.findOne({
       _id: groupAdminId,
       company: req.user.company,
@@ -357,120 +458,150 @@ exports.createGroup = async (req, res) => {
 
     if (!adminUser) {
       return res.status(404).json({
-        message: "Group admin not found or not in your company",
+        messageKey: "errors.groupAdminNotFound",
       });
     }
 
-    // ❌ Prevent admin duplication
-    if (memberIds.some(id => id.toString() === groupAdminId.toString())) {
-      return res.status(400).json({
-        message: "Group admin cannot be in members",
-      });
-    }
+    /* =========================================================
+       STEP 3: REMOVE GROUP ADMIN FROM MEMBERS
+    ========================================================= */
 
-    // ✅ STEP 3: Validate Members
-    if (memberIds.length > 0) {
+    const filteredMemberIds = memberIds.filter(
+      (id) => id.toString() !== groupAdminId.toString()
+    );
+
+    /* =========================================================
+       STEP 4: VALIDATE MEMBERS
+    ========================================================= */
+
+    if (filteredMemberIds.length > 0) {
       const validMembers = await User.find({
-        _id: { $in: memberIds },
+        _id: { $in: filteredMemberIds },
         company: req.user.company,
         isDeleted: false,
       }).select("_id");
 
-      if (validMembers.length !== memberIds.length) {
+      if (validMembers.length !== filteredMemberIds.length) {
         return res.status(400).json({
-          message: "Some members do not belong to your company",
+          messageKey: "errors.invalidMembers",
         });
       }
     }
 
-    // ✅ STEP 4: Prepare members
+    /* =========================================================
+       STEP 5: PREPARE MEMBERS
+    ========================================================= */
+
     const members = [
-      { user: groupAdminId, role: "GROUP_ADMIN" },
-      ...memberIds
-        .filter(id => id.toString() !== groupAdminId.toString())
-        .map(id => ({ user: id, role: "EMPLOYEE" })),
+      {
+        user: groupAdminId,
+        role: "GROUP_ADMIN",
+      },
+
+      ...filteredMemberIds.map((id) => ({
+        user: id,
+        role: "EMPLOYEE",
+      })),
     ];
 
+    // remove duplicate users
     const uniqueMembers = Array.from(
-      new Map(members.map(m => [m.user.toString(), m])).values()
+      new Map(
+        members.map((member) => [
+          member.user.toString(),
+          member,
+        ])
+      ).values()
     );
 
-    // =========================================================
-    // 🔥 STEP 5: Determine FINAL TASK IDS
-    // =========================================================
+    /* =========================================================
+       STEP 6: DETERMINE FINAL TASK IDS
+    ========================================================= */
 
     let finalTaskIds = [];
 
-    // ✅ CASE 1: Only contractIds → take ALL tasks of contracts
+    // CASE 1: only contractIds
     if (contractIds.length > 0 && taskIds.length === 0) {
       const contracts = await Contract.find({
         _id: { $in: contractIds },
         company: req.user.company,
+        isDeleted: false,
       }).select("tasks");
 
-      finalTaskIds = contracts.flatMap(c => c.tasks.map(t => t.toString()));
+      finalTaskIds = contracts.flatMap((contract) =>
+        contract.tasks.map((task) => task.toString())
+      );
     }
 
-    // ✅ CASE 2: contractIds + taskIds → only given tasks
+    // CASE 2: contractIds + taskIds
     else if (contractIds.length > 0 && taskIds.length > 0) {
       const contracts = await Contract.find({
         _id: { $in: contractIds },
         company: req.user.company,
+        isDeleted: false,
       }).select("tasks");
 
       const allowedTaskIds = new Set(
-        contracts.flatMap(c => c.tasks.map(t => t.toString()))
+        contracts.flatMap((contract) =>
+          contract.tasks.map((task) => task.toString())
+        )
       );
 
       const invalidTasks = taskIds.filter(
-        id => !allowedTaskIds.has(id.toString())
+        (id) => !allowedTaskIds.has(id.toString())
       );
 
       if (invalidTasks.length > 0) {
         return res.status(400).json({
-          message: "Some tasks do not belong to provided contracts",
+          messageKey: "errors.invalidTasksForContracts",
+          invalidTasks,
         });
       }
 
       finalTaskIds = taskIds;
     }
 
-    // ✅ CASE 3: Only taskIds
+    // CASE 3: only taskIds
     else {
       finalTaskIds = taskIds;
     }
 
-    // ❗ Remove duplicates
-    finalTaskIds = [...new Set(finalTaskIds.map(id => id.toString()))];
+    // remove duplicates
+    finalTaskIds = [
+      ...new Set(finalTaskIds.map((id) => id.toString())),
+    ];
 
-    // =========================================================
-    // 🔥 STEP 6: Prevent duplicate group assignment
-    // =========================================================
+    /* =========================================================
+       STEP 7: CHECK DUPLICATE TASK ASSIGNMENT
+    ========================================================= */
 
-    const existing = await Group.find({
+    const existingGroups = await Group.find({
       company: req.user.company,
       assignmentType: "TASK",
       task: { $in: finalTaskIds },
+      isDeleted: false,
     }).select("task");
 
     const existingTaskIds = new Set(
-      existing.map(g => g.task.toString())
+      existingGroups.map((group) =>
+        group.task.toString()
+      )
     );
 
-    const duplicateTasks = finalTaskIds.filter(id =>
+    const duplicateTasks = finalTaskIds.filter((id) =>
       existingTaskIds.has(id)
     );
 
     if (duplicateTasks.length > 0) {
       return res.status(400).json({
-        message: "Some tasks already have groups",
+        messageKey: "errors.tasksAlreadyAssigned",
         duplicateTasks,
       });
     }
 
-    // =========================================================
-    // 🔥 STEP 7: Create Groups (PER TASK)
-    // =========================================================
+    /* =========================================================
+       STEP 8: CREATE GROUPS
+    ========================================================= */
 
     const createdGroups = [];
 
@@ -488,6 +619,10 @@ exports.createGroup = async (req, res) => {
       createdGroups.push(group);
     }
 
+    /* =========================================================
+       STEP 9: RESPONSE
+    ========================================================= */
+
     return res.status(201).json({
       message: "Groups created successfully",
       data: createdGroups,
@@ -495,8 +630,9 @@ exports.createGroup = async (req, res) => {
 
   } catch (error) {
     console.error("Create group error:", error);
+
     return res.status(500).json({
-      message: "Failed to create group",
+      messageKey: "errors.failedToCreateGroup",
     });
   }
 };

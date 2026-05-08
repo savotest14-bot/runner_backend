@@ -10,7 +10,8 @@ const UPLOAD_PATHS = Object.freeze({
  ticketFile:"ticketFile",
  chatFile:"chatFile",
  licenseDocuments:"licenses",
- companyLogo:"company-logos"
+ companyLogo:"company-logos",
+ expenseImage:"expenseImage"
 });
 
 const ensureDir = (dir) => {
